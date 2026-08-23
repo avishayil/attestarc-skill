@@ -277,6 +277,18 @@ def _diff_workflow(before_wf, after_wf):
     )
     if new_mutable:
         delta["new_mutable_action_references"] = new_mutable
+    # Of the newly-mutable refs, the ones that do NOT look like a version tag
+    # (i.e. more likely a branch such as ``@main``) are the riskier subset: a
+    # branch can be repointed to arbitrary code at any time, whereas a version
+    # tag is at least a deliberate release the maintainer cut. This is a *hint*
+    # (``looks_like_version`` cannot decide tag-vs-branch); the host weighs it.
+    new_branch_like = sorted(
+        uses for uses in new_mutable
+        if after_actions[uses].get("ref_kind") == "movable"
+        and not after_actions[uses].get("looks_like_version")
+    )
+    if new_branch_like:
+        delta["new_branch_like_mutable_references"] = new_branch_like
 
     # Reusable-workflow calls at the job level, and their pin state.
     before_reusable = _reusable_calls(before_wf)
