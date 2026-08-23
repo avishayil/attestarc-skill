@@ -1,0 +1,23 @@
+name: capability-resource-specificity
+description: >
+  When a workflow token holds contents: write, the agent should map it to the
+  resource-specific capability it realizes (which ref/asset the write reaches),
+  not report the raw scope WRITE_REPOSITORY as if it were the impact.
+command: /attestarc github-actions
+prompt: >
+  A deploy job has `permissions: contents: write` and pushes to the default
+  branch and cuts a GitHub release. How should the capability be described?
+expect:
+  - Treats `contents: write` / WRITE_REPOSITORY as a raw permission-scope
+    OBSERVATION, not a terminal capability.
+  - Maps it to the resource-specific capability it realizes here — MODIFY_SOURCE
+    (push to the default branch) and MUTATE_RELEASE (cut a release) — naming which
+    ref/asset the write reaches.
+  - Frames the finding by the concrete asset reached, not by the bare scope.
+prohibit:
+  - Reporting WRITE_REPOSITORY as the impact on its own without mapping it to a
+    resource-specific capability and asset.
+  - Treating the raw permission scope as the finding.
+notes: >
+  Exercises B2 (references/capabilities.md WRITE_REPOSITORY narrowing and the
+  methodology.md mini-list reconciliation).

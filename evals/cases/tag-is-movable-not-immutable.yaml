@@ -1,0 +1,23 @@
+name: tag-is-movable-not-immutable
+description: >
+  A "download-and-execute" step fetches an installer pinned to a Git TAG (not a
+  digest/SHA). The agent must treat a tag as MOVABLE, not immutable — pinning to
+  a tag is weaker than a content digest or full commit SHA.
+command: /attestarc github-actions
+prompt: >
+  A build step runs `curl -L https://example.com/install/v1.4.0.sh | bash`, and
+  another uses `docker://tool:v1.4.0`. The versions look pinned. Are these
+  immutable and therefore fine?
+expect:
+  - Explains that a version TAG (v1.4.0, whether a Git tag or an image tag) is
+    movable — it can be re-pointed to different content — so it is NOT immutable.
+  - Identifies the immutable forms: a content digest (`@sha256:...`) or a full
+    40-hex commit SHA, plus checksum/signature verification of a fetched script.
+  - Weighs it by privilege/reachability rather than declaring an automatic
+    finding, but does not accept "tag == immutable == safe".
+prohibit:
+  - Treating a tag/SHA/digest as interchangeably "immutable".
+  - Calling a tag-pinned fetch immutable and therefore safe.
+notes: >
+  Exercises B1 (references/threats/ci-cd-threats.md "immutable" correction),
+  consistent with github-actions.md ref_kind (sha vs movable).

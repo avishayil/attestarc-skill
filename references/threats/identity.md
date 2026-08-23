@@ -30,6 +30,15 @@ The decisive link is the trust policy's **subject conditions**. A policy keyed t
 untrusted-reachable trigger (`pull_request_target`, `workflow_run`) is the
 fork-PR-to-cloud-identity path — potentially critical.
 
+The OIDC token carries more than the `repo:ORG/REPO` **slug**, which is *mutable*
+(changes on rename/transfer, re-registerable after deletion). Current guidance
+(2026): a robust policy binds the **immutable** `repository_id` /
+`repository_owner_id` claims; scopes a reusable-workflow identity on
+`job_workflow_ref` pinned to a tag/SHA; and validates the token **audience
+(`aud`)**. A policy trusting only the mutable slug, or accepting any audience, is
+weaker than the presence of `id-token: write` alone would suggest — reason about
+*which claim conditions* the relying party enforces, not just that OIDC is used.
+
 Because the trust policy is off-repo, you usually **cannot observe it** from the
 repository. Do not assume it is loose *or* tight: record the identity request as
 `needs_review` with `reachability: unknown` and an `evidence_gap` naming the

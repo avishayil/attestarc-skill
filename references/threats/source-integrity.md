@@ -60,10 +60,13 @@ affected transition `needs_review` with the setting named as an `evidence_gap`.
 ## SLSA Source as an internal ladder
 
 Use this to reason about *how strong* source integrity is — never to lead the
-user experience with a level number:
+user experience with a level number. Levels follow the **SLSA v1.2 Source track**:
 
-- **L2** — history is protected and retained (no silent force-push/rewrite).
-- **L3** — continuity/authenticity of the revision history is assured.
+- **L1** — the source is version-controlled in an identified system.
+- **L2** — history is protected and retained (no silent force-push/rewrite), and
+  changes are authenticated to an author/identity.
+- **L3** — continuity/authenticity of the revision history is assured by
+  continuous technical controls that resist tampering.
 - **L4** — two-party review of the final revision, including re-review after any
   modification.
 

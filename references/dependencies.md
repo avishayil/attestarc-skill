@@ -24,9 +24,11 @@ controls in this repository.
 - **Dependency review — present vs enforcing**: a dependency-review step
   (e.g. `actions/dependency-review-action`) existing in a workflow is not the
   same as it *blocking* a merge. Distinguish three states: absent; present but
-  advisory (`fail-on-severity` unset/`continue-on-error: true`, or the workflow
-  not a required status check); present and enforcing (fails the PR and is
-  required by the ruleset). Only the last actually gates risky dependencies at
+  advisory (`warn-only: true`, `continue-on-error: true`, or the workflow not a
+  required status check); present and enforcing (fails the PR and is required by
+  the ruleset). Note the action defaults to `fail-on-severity: low` with
+  `warn-only: false`, so an *unset* `fail-on-severity` **blocks by default** — it
+  is only advisory when explicitly softened or not gated server-side. Only the last actually gates risky dependencies at
   the boundary. Report which state you observed and what evidence shows it — and
   where enforcement lives server-side that you could not verify, record an
   `evidence_gap` / `needs_review` rather than assuming it enforces.

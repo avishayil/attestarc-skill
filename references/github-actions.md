@@ -198,6 +198,17 @@ For every `uses:` distinguish `kind`: `local`, `external`, `reusable-workflow`,
   code is an opaque image. Prefer an immutable digest (`docker://image@sha256:…`).
   Category: `mutable-docker-action`.
 
+**Local and composite actions are transitive code, not trusted leaves.** A
+`uses: ./path` step (`kind: local`, flagged `transitive_code: true` with its
+`local_path`) runs whatever that action's `action.yml`/`action.yaml` declares —
+a `run:` script, a composite action's own steps, or another `uses:`. Living
+in-repo does not make it trusted: it executes with the job's privilege and is a
+place attacker-influenced changes can hide. Build scripts a workflow invokes
+(`make`, `npm run build`, `./ci/*.sh`) are transitive code the same way. The
+parser surfaces the reference but does **not** recurse — when a local/composite
+action or invoked script is on a privileged or untrusted-reachable path, read
+the referenced file as part of the assessment rather than assuming it is benign.
+
 **Reusable workflows and `secrets: inherit`.** A job-level
 `uses: owner/repo/.github/workflows/x.yml@ref` runs another workflow's code with
 whatever secrets the caller passes. The facts to reason over:
@@ -221,6 +232,10 @@ not just the action version. Under `pull_request_target`/`workflow_run`, an
 explicit `with: ref: ${{ github.event.pull_request.head.sha }}` (or `head.ref`)
 checks out **attacker-controlled code** into a privileged context —
 `inspect_workflows.py` flags this as `checkout_refs[].references_untrusted_ref`.
+The checkout alone is inert; the trust transition closes when a later step
+(build, test, install, `make`, a local action, an arbitrary script) then
+**executes** that checked-out code with the privileged token/secrets in scope.
+Trace to the executing step, not just the checkout.
 Also note `persist-credentials: true` (the default before you set it false)
 leaves the token on disk for later steps, and `fetch-depth`/submodule options
 that pull additional untrusted content. The safe default checkout under a fork
@@ -269,14 +284,53 @@ same line in a throwaway lint job on `pull_request` is far weaker. Category:
 `download-and-execute`. Remediation directions: pin to a versioned installer with
 a checksum, vendor the script and review it, or replace it with a pinned action.
 
+## Platform mitigations as reachability down-gates
+
+Modern org/repo Actions settings can move a pattern back down the ladder from
+`reachable` to `present`. Read them (via trusted `gh`/MCP) before rating, and
+where you cannot, record `needs_review` with an `evidence_gap` — never assume a
+mitigation is present, and never turn its absence into a finding:
+
+- **Require-SHA-pinning policy** (`actions/*` allow-list / "require actions to be
+  pinned to a full-length commit SHA"). Under an enforced policy, a movable
+  `uses:` ref (`@v4`, `@main`) is rejected at run time, so the drift path is not
+  reachable the usual way — the finding becomes "policy would need to lapse", not
+  "runs arbitrary code now".
+- **Workflow Execution Protections / fork-PR approval** — "require approval for
+  all outside collaborators" (or all fork PRs) gates whether an untrusted trigger
+  runs at all. An approval-gated fork `pull_request` is not attacker-reachable
+  without a maintainer's action; note that human approval is the control and can
+  be socially engineered, but it is a real gate.
+- **Allowed-actions and reusable-workflow allow-lists** — restrict which external
+  code can execute, narrowing the untrusted-code surface.
+
+These are down-gates on **reachability**, not evidence of a finding. A movable
+ref under an enforced SHA policy is hardening-at-most; the same ref with no such
+policy (or an unverifiable one) stays reachable.
+
 ## Runners
 
-- GitHub-hosted (`ubuntu-latest`, …) are ephemeral.
-- `self-hosted` runners are persistent and often on privileged networks. Running
-  untrusted contributions on a self-hosted runner, or sharing a self-hosted
-  runner between PR workloads and release/deploy workloads, is a serious risk
-  (persistence, lateral movement, secret theft). Correlate `self_hosted: true`
-  with untrusted triggers and with deployment capability.
+`inspect_workflows.py` emits `self_hosted` and the runner `labels` as **facts**.
+`self_hosted: true` is not itself the risk — do not equate it with "persistent".
+What sets blast radius is three separable properties the label alone rarely
+answers; record them as `evidence_gaps`/`needs_review` when the workflow can't:
+
+- **Ephemeral vs persistent** — an ephemeral runner (fresh VM/container per job,
+  `--ephemeral`, or an autoscaling set like actions-runner-controller) discards
+  state between jobs, so cross-job persistence and lateral movement are far
+  weaker than on a long-lived host that reuses its filesystem and credentials.
+- **Runner-group scope** — which repos/workflows may target this runner. A group
+  scoped to one trusted repo is very different from an org-wide group any repo
+  (or a fork PR) can land jobs on.
+- **Network segmentation** — what the runner's network reaches (production,
+  cloud metadata endpoints, internal services). A segmented runner limits what a
+  compromise touches.
+
+The serious pattern is running **untrusted contributions** on a **persistent,
+broadly-scoped, poorly-segmented** self-hosted runner, or sharing one between PR
+workloads and release/deploy workloads (persistence, lateral movement, secret
+theft). Correlate `self_hosted: true` with untrusted triggers and deployment
+capability — but reason about those three properties, not the bool alone.
 
 ## Environments
 

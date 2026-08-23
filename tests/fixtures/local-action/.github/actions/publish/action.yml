@@ -1,0 +1,15 @@
+name: publish
+description: Build the package and publish it to the registry.
+inputs:
+  registry:
+    description: Target registry host
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Build
+      shell: bash
+      run: ./scripts/build.sh
+    - name: Push
+      shell: bash
+      run: ./scripts/push.sh "${{ inputs.registry }}"

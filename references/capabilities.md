@@ -49,16 +49,22 @@ The tokens, grouped by the asset class they act on.
   abstract outcome; on GitHub it is reached by direct push, by a writable
   `GITHUB_TOKEN` (`WRITE_REPOSITORY`), or by defeating review (`BYPASS_REVIEW`).
   See `references/threats/source-integrity.md`.
-- **`WRITE_REPOSITORY`** — hold a repository-write capability via the workflow
-  token or an identity: `contents: write`, `packages: write`, `actions: write`,
-  `pull-requests: write`, a deploy key, or an app installation. The concrete
-  mechanism that most often realizes `MODIFY_SOURCE`, `MUTATE_RELEASE`, or
-  `MODIFY_PIPELINE`; always ask *which ref/asset* the write actually reaches.
+- **`WRITE_REPOSITORY`** — a **raw permission-scope observation**, not a terminal
+  capability: a repository-write grant on the workflow token or an identity
+  (`contents: write`, `packages: write`, `actions: write`, `pull-requests: write`,
+  a deploy key, an app installation). Always **map it to the resource-specific
+  capability it realizes** — `MODIFY_SOURCE`, `MUTATE_RELEASE`, `MODIFY_PIPELINE`,
+  or `PUBLISH_ARTIFACT` — by naming *which ref/asset* the write reaches. Do not
+  report `WRITE_REPOSITORY` as the impact on its own; it is the mechanism, the
+  resource-specific token is the finding.
 - **`BYPASS_REVIEW`** — land a change on a protected ref without the two-party
   review that is the load-bearing control: admin bypass of required review, a
-  ruleset in `evaluate`/`disabled` mode, a rule that does not target the ref,
-  missing/decorative CODEOWNERS enforcement, or self-approval. See
-  `references/github.md`.
+  ruleset in `evaluate`/`disabled` mode, a rule that does not target the ref, or
+  self-approval. **Absent or decorative CODEOWNERS is a distinct, evidence-gated
+  sub-case**: it only realizes `BYPASS_REVIEW` where review is not otherwise
+  required for the ref (no required-reviewers rule, or CODEOWNERS review not
+  enforced) — confirm that before claiming it, do not infer bypass from a missing
+  `CODEOWNERS` file alone. See `references/github.md`.
 - **`APPROVE_CHANGE`** — supply the *approving* review or the required environment
   approval itself (a bot/token that can approve PRs, "Allow GitHub Actions to
   approve pull requests", an environment reviewer an attacker controls). Turns a

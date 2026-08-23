@@ -113,7 +113,8 @@ dependency even with no `uses:` — `curl … | sh`, `wget … && chmod +x`,
 `cargo install`. The parser flags these per run step as `fetch_execute` with a
 `fetch_execute_excerpt`. Do not treat the pattern as an automatic finding; ask:
 
-- Is the fetched content **immutable** (a digest/tag/SHA) or a moving `latest`?
+- Is the fetched content **immutable** (a content digest or full commit SHA — a
+  tag is *movable*, not immutable) or a moving `latest`/branch?
 - Is its **integrity verified** (checksum, signature) before use?
 - Is it actually **executed**?
 - What **privilege** does the job hold? A release/publish job doing this

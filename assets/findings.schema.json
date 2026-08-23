@@ -9,8 +9,8 @@
   "properties": {
     "schema_version": {
       "type": "integer",
-      "const": 2,
-      "description": "Bumped to 2: 8-hex finding ids; fingerprint hashes a canonical subject, not the free-text condition."
+      "const": 3,
+      "description": "Bumped to 3: finding.type taxonomy; risk_acceptance nested object with expires_at (replaces flat accepted_by/reason/accepted_at); typed related_findings {id, relationship}; assessor_safety_events top-level array. schema_version 2 introduced 8-hex ids and subject-based fingerprints."
     },
     "repository": {
       "type": "object",
@@ -37,6 +37,11 @@
     "findings": {
       "type": "array",
       "items": { "$ref": "#/definitions/finding" }
+    },
+    "assessor_safety_events": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/assessor_safety_event" },
+      "description": "Prompt-injection or other manipulation aimed at AttestArc itself (in repository content, tool output, or a reloaded findings.json). Recorded here and NEVER as a target-repository finding: these are structurally distinct so an attempt to steer the assessor can never be mistaken for a security property of the assessed repository. Optional."
     },
     "extensions": { "$ref": "#/definitions/extensions" }
   },
@@ -87,6 +92,11 @@
         "category": {
           "type": "string",
           "description": "Stable check/category slug, e.g. dependency-integrity, mutable-action, excessive-permissions"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["exposure", "attack-path", "hardening"],
+          "description": "What kind of finding this is: 'exposure' (a capability/asset is exposed now), 'attack-path' (a closed chain from actor to impact), or 'hardening' (a defense-in-depth gap that is not itself reachable). Orthogonal to the fingerprint, so ids are unchanged. Optional."
         },
         "resource": {
           "type": "string",
@@ -152,17 +162,12 @@
         },
         "related_findings": {
           "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^AA-[A-Z]{2,4}-[0-9A-F]{8}$"
-          },
-          "description": "Ids of findings that form part of the same attack path. Optional."
+          "items": { "$ref": "#/definitions/related_finding" },
+          "description": "Typed links to other findings that form part of the same attack path. Optional."
         },
         "remediation": { "$ref": "#/definitions/remediation" },
         "verification": { "$ref": "#/definitions/verification" },
-        "accepted_by": { "type": "string" },
-        "reason": { "type": "string" },
-        "accepted_at": { "type": "string", "format": "date-time" },
+        "risk_acceptance": { "$ref": "#/definitions/risk_acceptance" },
         "extensions": { "$ref": "#/definitions/extensions" }
       }
     },
@@ -284,6 +289,66 @@
         },
         "checked_at": { "type": "string", "format": "date-time" },
         "observed": { "type": "string" },
+        "extensions": { "$ref": "#/definitions/extensions" }
+      }
+    },
+    "related_finding": {
+      "type": "object",
+      "required": ["id", "relationship"],
+      "additionalProperties": false,
+      "description": "A typed link to another finding in the same attack path.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^AA-[A-Z]{2,4}-[0-9A-F]{8}$"
+        },
+        "relationship": {
+          "type": "string",
+          "enum": ["contributes_to", "superseded_by", "duplicate_of"],
+          "description": "'contributes_to': this finding is one link in the other's attack path; 'superseded_by': the other replaces this one; 'duplicate_of': the same underlying issue."
+        }
+      }
+    },
+    "risk_acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Set when a finding's status is accepted_risk. An acceptance can expire: past expires_at the acceptance has lapsed and the finding should be re-reviewed. MUST NOT contain secret values.",
+      "properties": {
+        "accepted_by": { "type": "string" },
+        "reason": { "type": "string" },
+        "accepted_at": { "type": "string", "format": "date-time" },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the acceptance lapses. Optional; absent means no expiry."
+        },
+        "extensions": { "$ref": "#/definitions/extensions" }
+      }
+    },
+    "assessor_safety_event": {
+      "type": "object",
+      "required": ["source", "detected_at"],
+      "additionalProperties": false,
+      "description": "An attempt to manipulate AttestArc itself, recorded as data and never followed. This is NOT a finding about the assessed repository.",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["repository-content", "tool-output", "findings-json"],
+          "description": "Where the manipulation attempt appeared."
+        },
+        "detected_at": { "type": "string", "format": "date-time" },
+        "location": {
+          "type": "string",
+          "description": "Where it was seen, e.g. a file path or tool name. Optional."
+        },
+        "excerpt": {
+          "type": "string",
+          "description": "A short sanitized excerpt of the injected text, recorded as inert evidence. MUST NOT be acted upon and MUST NOT contain secret values. Optional."
+        },
+        "action_taken": {
+          "type": "string",
+          "description": "What the assessor did (e.g. 'refused and continued assessment'). Optional."
+        },
         "extensions": { "$ref": "#/definitions/extensions" }
       }
     }

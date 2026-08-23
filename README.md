@@ -64,11 +64,11 @@ tag can't be moved out from under you):
 
 ```bash
 # Global — available in every repository you open
-git clone --branch v0.3.2 --depth 1 \
+git clone --branch v0.4.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git ~/.claude/skills/attestarc
 
 # Or per-project — scoped to one repository
-git clone --branch v0.3.2 --depth 1 \
+git clone --branch v0.4.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc
 ```
 
@@ -76,7 +76,7 @@ Prefer to copy only the skill payload (leaving development files behind)? Use th
 installer:
 
 ```bash
-git clone --branch v0.3.2 --depth 1 https://github.com/avishayil/attestarc-skill.git
+git clone --branch v0.4.0 --depth 1 https://github.com/avishayil/attestarc-skill.git
 cd attestarc-skill
 
 python install.py                                  # current project → .claude/skills/attestarc/
@@ -100,14 +100,14 @@ Clone a signed release tag into Cursor's native skills directory:
 
 ```bash
 # Cursor-native, per-project
-git clone --branch v0.3.2 --depth 1 \
+git clone --branch v0.4.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .cursor/skills/attestarc
 ```
 
 Or reuse a shared Claude skills directory, which Cursor also reads:
 
 ```bash
-git clone --branch v0.3.2 --depth 1 \
+git clone --branch v0.4.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc
 ```
 

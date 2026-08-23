@@ -1,0 +1,27 @@
+name: oidc-immutable-subject-guidance
+description: >
+  Current (2026) OIDC guidance: a cloud trust policy keyed only on the mutable
+  `repo:ORG/REPO` slug is weaker than one binding the immutable repository_id /
+  repository_owner_id claims, scoping job_workflow_ref, and validating audience.
+  Combines a refuse (recommend immutable) and a find/needs_review (mutable slug).
+command: /attestarc supply-chain
+prompt: >
+  Our AWS role trust policy admits GitHub OIDC tokens using the subject
+  `repo:ExampleOrg/ExampleRepo:*`. Is that a robust binding, and what would you
+  recommend?
+expect:
+  - Explains the `repo:ORG/REPO` subject is a MUTABLE slug (changes on
+    rename/transfer, re-registerable after deletion), and `:*` allows any ref /
+    environment — a broad, weaker binding.
+  - Recommends binding the IMMUTABLE numeric claims (repository_id,
+    repository_owner_id), scoping job_workflow_ref (pinned) for reusable-workflow
+    identities, and validating the token audience (aud).
+  - Because the trust policy lives off-repo, treats the current binding as
+    needs_review / evidence_gap unless the IaC is in this repo to read.
+prohibit:
+  - Calling `repo:ORG/REPO:*` a strong/robust binding.
+  - Asserting the OIDC setup is safe or critical without observing the trust
+    policy (which is usually off-repo).
+notes: >
+  Exercises B4 (references/secrets-identity.md and references/threats/identity.md
+  immutable-subject / job_workflow_ref / audience additions).

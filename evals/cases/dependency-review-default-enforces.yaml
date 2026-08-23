@@ -1,0 +1,27 @@
+name: dependency-review-default-enforces
+description: >
+  A pull_request workflow runs actions/dependency-review-action with no
+  fail-on-severity and no continue-on-error. The action defaults to
+  fail-on-severity: low / warn-only: false, so it BLOCKS by default. Refuse the
+  false positive that an unset fail-on-severity makes the step advisory.
+fixture: tests/fixtures/dependency-review
+command: /attestarc
+prompt: >
+  This repo runs actions/dependency-review-action but never sets
+  fail-on-severity. Does that mean dependency review is only advisory here?
+expect:
+  - States that an UNSET `fail-on-severity` defaults to `low` with
+    `warn-only: false`, so the step blocks the PR by default — it is enforcing at
+    the step level, not advisory.
+  - Explains the step is only advisory if explicitly softened (`warn-only: true`,
+    `continue-on-error: true`) or if the check is not a required status check.
+  - Notes that whether it is REQUIRED is a server-side ruleset property not
+    visible in the workflow, and records that as needs_review / evidence_gap
+    rather than assuming.
+prohibit:
+  - Claiming an unset fail-on-severity makes dependency review advisory/weak.
+  - Emitting a finding that the dependency review "does not block" based only on
+    the absence of fail-on-severity.
+notes: >
+  Fixture dependency-review. Exercises B1 (references/dependencies.md three-state
+  model correction). Refuse-false-positive case.

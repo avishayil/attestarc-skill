@@ -34,16 +34,23 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
 
 from _pathsafe import resolve_within_root
 
-# Bumped to 2 in v0.3.0: finding ids widened to 8 hex chars and the fingerprint
-# no longer hashes the free-text ``condition`` (it hashes a canonical
-# ``subject`` instead), so ids from schema_version 1 are not comparable.
-SCHEMA_VERSION = 2
+# Bumped to 3 in v0.4.0: finding.type taxonomy; risk_acceptance nested object
+# (replaces flat accepted_by/reason/accepted_at) with an expires_at; typed
+# related_findings {id, relationship}; assessor_safety_events top-level array.
+# Version 2 (v0.3.0) widened finding ids to 8 hex chars and made the fingerprint
+# hash a canonical ``subject`` rather than the free-text ``condition``.
+SCHEMA_VERSION = 3
+
+# AttestArc version stamped onto findings as provenance (assessment_version).
+# Bump in lockstep with pyproject/SKILL.md at each release.
+ASSESSMENT_VERSION = "0.4.0"
 
 # Persisted string leaves are capped so a hostile tool result cannot turn
 # durable state into a multi-megabyte prompt-injection payload.
@@ -510,6 +517,11 @@ def upsert_finding(state: dict, finding: dict) -> tuple[dict, bool]:
                 existing.get("evidence", []), incoming.get("evidence", [])
             )
             merged["last_seen"] = now
+            # Provenance: the condition was (re)observed now, by this version.
+            merged["observed_at"] = now
+            merged["assessment_version"] = ASSESSMENT_VERSION
+            if incoming.get("source_revision"):
+                merged["source_revision"] = incoming["source_revision"]
             merged.setdefault("first_seen", existing.get("first_seen", now))
             merged["id"] = existing.get("id", incoming["id"])
             # Do not silently reopen a finding a human closed.
@@ -522,6 +534,8 @@ def upsert_finding(state: dict, finding: dict) -> tuple[dict, bool]:
 
     incoming.setdefault("first_seen", now)
     incoming["last_seen"] = now
+    incoming.setdefault("observed_at", now)
+    incoming.setdefault("assessment_version", ASSESSMENT_VERSION)
     findings.append(incoming)
     return incoming, True
 
@@ -632,9 +646,31 @@ def _read_finding_input(source: str) -> dict:
     return data
 
 
+def _git_head_revision(root: str) -> str | None:
+    """Read-only best-effort: the current HEAD commit, or None.
+
+    Used only to stamp ``source_revision`` provenance; never mutates the repo and
+    never raises (git absent / not a repo / detached is all fine → None).
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+            text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    rev = out.stdout.strip()
+    return rev if out.returncode == 0 and re.fullmatch(r"[0-9a-f]{7,40}", rev) else None
+
+
 def cmd_upsert(args) -> int:
     state = load_state(args.file)
     finding = _read_finding_input(args.source)
+    # Stamp source_revision provenance from git HEAD unless the host supplied it.
+    if not finding.get("source_revision"):
+        rev = _git_head_revision(args.root)
+        if rev:
+            finding["source_revision"] = rev
     stored, created = upsert_finding(state, finding)
     save_state(state, args.file, root=args.root)
     print(json.dumps(
@@ -656,15 +692,24 @@ def cmd_set_status(args) -> int:
             f"invalid status {args.status!r}; choose from {', '.join(STATUSES)}\n"
         )
         return 1
+    now = _now()
     f["status"] = args.status
-    f["last_seen"] = _now()
+    f["last_seen"] = now
     if args.status == "accepted_risk":
-        f["accepted_by"] = args.by or "user"
-        f["accepted_at"] = _now()
+        acceptance = dict(f.get("risk_acceptance", {}))
+        acceptance["accepted_by"] = args.by or "user"
+        acceptance["accepted_at"] = now
         if args.reason:
-            f["reason"] = args.reason
+            acceptance["reason"] = args.reason
+        if getattr(args, "expires", None):
+            acceptance["expires_at"] = args.expires
+        f["risk_acceptance"] = acceptance
     elif args.reason:
-        f["reason"] = args.reason
+        # A reason for a non-acceptance status has no closed field; keep it in
+        # the open extensions namespace rather than dropping it.
+        ext = dict(f.get("extensions", {}))
+        ext["status_reason"] = args.reason
+        f["extensions"] = ext
     save_state(state, args.file, root=args.root)
     print(json.dumps({"id": f["id"], "status": f["status"]}, indent=2))
     return 0
@@ -684,6 +729,7 @@ def cmd_resolve(args) -> int:
     now = _now()
     f["status"] = "resolved"
     f["last_seen"] = now
+    f["last_verified_at"] = now
     verification = dict(f.get("verification", {}))
     verification["status"] = "verified"
     verification["checked_at"] = now
@@ -701,6 +747,42 @@ def cmd_resolve(args) -> int:
     save_state(state, args.file, root=args.root)
     print(json.dumps({"id": f["id"], "status": "resolved",
                       "verification": verification["status"]}, indent=2))
+    return 0
+
+
+_SAFETY_SOURCES = ("repository-content", "tool-output", "findings-json")
+
+
+def cmd_record_safety_event(args) -> int:
+    """Record an attempt to manipulate AttestArc itself.
+
+    This is an *assessor-safety event*, structurally separate from findings: it
+    is never a security finding about the assessed repository. The excerpt is
+    stored as inert evidence (secret-scanned, capped) and MUST NOT be acted on.
+    """
+    if args.source not in _SAFETY_SOURCES:
+        sys.stderr.write(
+            f"invalid source {args.source!r}; choose from "
+            f"{', '.join(_SAFETY_SOURCES)}\n"
+        )
+        return 1
+    state = load_state(args.file)
+    event = {"source": args.source, "detected_at": _now()}
+    if args.location:
+        event["location"] = args.location
+    if args.excerpt:
+        if looks_like_secret(args.excerpt):
+            sys.stderr.write(
+                "refusing to store excerpt: appears to contain a secret value.\n"
+            )
+            return 1
+        event["excerpt"] = args.excerpt
+    event["action_taken"] = args.action or "refused; recorded as data, not followed"
+    event = _cap_strings(event)
+    state.setdefault("assessor_safety_events", []).append(event)
+    save_state(state, args.file, root=args.root)
+    print(json.dumps({"recorded": "assessor_safety_event",
+                      "source": event["source"]}, indent=2))
     return 0
 
 
@@ -763,6 +845,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("status", choices=STATUSES)
     sp.add_argument("--reason")
     sp.add_argument("--by")
+    sp.add_argument("--expires",
+                    help="ISO-8601 expiry for an accepted_risk acceptance "
+                         "(risk_acceptance.expires_at); past it the acceptance "
+                         "has lapsed and the finding should be re-reviewed")
     sp.set_defaults(func=cmd_set_status)
 
     sp = sub.add_parser("resolve", parents=[common],
@@ -771,6 +857,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--method")
     sp.add_argument("--observed")
     sp.set_defaults(func=cmd_resolve)
+
+    sp = sub.add_parser("record-safety-event", parents=[common],
+                        help="record a prompt-injection/manipulation attempt "
+                             "aimed at AttestArc (never a target finding)")
+    sp.add_argument("source", choices=_SAFETY_SOURCES,
+                    help="where the manipulation attempt appeared")
+    sp.add_argument("--location", help="e.g. a file path or tool name")
+    sp.add_argument("--excerpt", help="short sanitized excerpt (inert evidence)")
+    sp.add_argument("--action", help="what the assessor did")
+    sp.set_defaults(func=cmd_record_safety_event)
 
     sp = sub.add_parser("validate", parents=[common],
                         help="validate the findings file")

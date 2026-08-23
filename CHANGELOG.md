@@ -3,6 +3,73 @@
 All notable changes to AttestArc are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-08-23
+
+**Public Preview — GitHub & GitHub Actions.** A correctness-and-precision pass
+driven by an external review. No new platforms and no restructure — the GitHub /
+Actions reasoning brain gets its platform model, capability vocabulary, and
+reachability facts sharpened so High/Critical conclusions hold up, and the
+findings schema grows four additive fields. Helpers stay stdlib-only at runtime.
+
+### Added
+
+- **Job/step reachability facts (`inspect_workflows.py`).** Job objects now carry
+  `if`, `needs` (normalized), `strategy` (`{has_matrix, matrix_keys, fail_fast}`),
+  and `continue_on_error`; step records carry `if` and `continue_on_error`. These
+  are the load-bearing conditions that decide whether a privileged job is actually
+  reachable — facts, not verdicts. `inspect_git_diff.py` surfaces
+  `jobs_if_guard_removed` when a job present before and after loses its job-level
+  `if:`, i.e. becomes newly reachable.
+- **Local/composite actions as transitive code (`inspect_workflows.py`).** A
+  `uses: ./…` reference now carries `local_path` and `transitive_code: true` — the
+  action's `action.yml` and any scripts it runs are part of the pipeline and are
+  not trusted by virtue of living in-repo. No recursive composite-action engine.
+- **Findings schema `schema_version` 3 (additive).** `finding.type` taxonomy
+  (`exposure` | `attack-path` | `hardening`); a nested `risk_acceptance` object
+  (`accepted_by`, `reason`, `accepted_at`, `expires_at`) replacing the flat
+  acceptance fields, so an acceptance can lapse; typed `related_findings`
+  (`{id, relationship}`, relationship ∈ `contributes_to` | `superseded_by` |
+  `duplicate_of`); and a top-level `assessor_safety_events` array. `state.py` now
+  populates the provenance fields the schema already declared — `observed_at`,
+  `source_revision` (from git HEAD), `assessment_version` on upsert and
+  `last_verified_at` on resolve — and gains `record-safety-event`. The 8-hex id
+  and subject fingerprint are unchanged; existing local state migrates in place.
+
+### Changed
+
+- **Platform model corrections.** Dependency Review with an unset
+  `fail-on-severity` **blocks by default** (advisory only when `warn-only: true`,
+  `continue-on-error: true`, or the check is not required); the SLSA Source ladder
+  is stated as the **v1.2 Source track** (L1–L4, with L1 version-controlled); a
+  **tag is movable, not immutable** (only a digest/full SHA is); `actions/checkout`
+  is inert until a later step executes the checked-out head in a privileged
+  context; runner risk is framed by ephemeral-vs-persistent, runner-group scope,
+  and network segmentation rather than `self_hosted == persistent`.
+- **Capability vocabulary.** `WRITE_REPOSITORY` is a raw permission-scope
+  observation that must be mapped to the resource-specific capability it realizes
+  (`MODIFY_SOURCE` / `MODIFY_PIPELINE` / `PUBLISH_ARTIFACT` / `MUTATE_RELEASE`), not
+  reported as an impact on its own; `BYPASS_REVIEW` no longer infers bypass from a
+  missing/decorative CODEOWNERS file alone (evidence-gated sub-case).
+- **Reachability down-gates.** Phase 4 and `SPECIFICATION §8.2` now weigh modern
+  platform defenses — a require-SHA-pinning Actions policy, Workflow Execution
+  Protections, and the effective fork-PR policy — as `present → reachable`
+  down-gates, recorded as `needs_review`/`evidence_gaps` when server-side state is
+  unreadable (absence of access is never itself a finding).
+- **OIDC guidance (2026).** Prefer the immutable `repository_id` /
+  `repository_owner_id` claims over the mutable `repo:ORG/REPO` slug, scope
+  `job_workflow_ref` for reusable-workflow trust, and validate the token audience.
+- **Assessor-safety events.** Prompt injection in repository content, tool output,
+  or reloaded `findings.json` aimed at AttestArc is an assessor-safety event —
+  refused and recorded via `record-safety-event`, structurally never a security
+  finding about the target repository. The injection *surface a repo exposes* to
+  its own untrusted inputs remains a legitimate finding.
+
+### Notes
+
+- Additive schema change from `0.3.2`; the id and subject fingerprint are
+  unchanged and existing local state remains compatible. No third-party runtime
+  dependencies (PyYAML remains dev-only).
+
 ## [0.3.2] — 2026-08-23
 
 **Public Preview — GitHub & GitHub Actions.** A security hotfix for the

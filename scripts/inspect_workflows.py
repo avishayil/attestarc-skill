@@ -535,8 +535,13 @@ def _classify_docker(uses: str):
 def _classify_action(uses: str):
     uses = uses.strip()
     if uses.startswith(("./", "../")):
+        # A local action is not a trusted leaf: its ``action.yml``/``action.yaml``
+        # (and any script or composite steps it declares) is executable code that
+        # is part of this pipeline and should itself be inspected. Emit that as a
+        # fact — we deliberately do not recurse into it here (no scanner engine).
         return {"name": uses, "ref": None, "pinned": None, "kind": "local",
-                "ref_kind": "none", "looks_like_version": False, "uses": uses}
+                "ref_kind": "none", "looks_like_version": False, "uses": uses,
+                "local_path": uses, "transitive_code": True}
     if uses.startswith("docker://"):
         return _classify_docker(uses)
     kind = "external"
@@ -643,12 +648,39 @@ def _inspect_job(name, job):
                     "references_untrusted_input": untrusted,
                     "fetch_execute": fetch_exec,
                     "fetch_execute_excerpt": fetch_excerpt,
+                    # Reachability facts (facts, not verdicts): a step-level ``if:``
+                    # can gate whether this step runs; ``continue-on-error`` lets the
+                    # job succeed even if it fails. The host decides what they mean.
+                    "if": step.get("if") if isinstance(step.get("if"), str) else None,
+                    "continue_on_error": step.get("continue-on-error"),
                 })
 
     job_uses = job.get("uses")  # reusable workflow at job level
     uses_pinned = None
     if isinstance(job_uses, str):
         uses_pinned = _classify_action(job_uses)["pinned"]
+
+    # Reachability facts (facts, not verdicts). A job-level ``if:`` and ``needs:``
+    # gate whether the job runs at all; a matrix fans it out; ``continue-on-error``
+    # lets the workflow pass even when this job fails. The host reasons about
+    # whether a privileged job is actually reachable — the parser only reports.
+    needs = job.get("needs")
+    if isinstance(needs, str):
+        needs = [needs]
+    elif isinstance(needs, list):
+        needs = [str(n) for n in needs]
+    else:
+        needs = None
+
+    strategy = job.get("strategy")
+    strategy_facts = None
+    if isinstance(strategy, dict):
+        matrix = strategy.get("matrix")
+        strategy_facts = {
+            "has_matrix": matrix is not None,
+            "matrix_keys": sorted(matrix.keys()) if isinstance(matrix, dict) else None,
+            "fail_fast": strategy.get("fail-fast"),
+        }
 
     return {
         "name": job.get("name", name),
@@ -661,6 +693,10 @@ def _inspect_job(name, job):
         "uses_pinned": uses_pinned,
         "secrets": _norm_job_secrets(job.get("secrets")),
         "uses_cache": uses_cache,
+        "if": job.get("if") if isinstance(job.get("if"), str) else None,
+        "needs": needs,
+        "strategy": strategy_facts,
+        "continue_on_error": job.get("continue-on-error"),
         "actions": actions,
         "run_steps": run_steps,
         "checkout_refs": checkout_refs,

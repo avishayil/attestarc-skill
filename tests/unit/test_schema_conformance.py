@@ -79,3 +79,40 @@ def test_persisted_nested_object_keys_are_in_schema(assets_dir):
         for item in items:
             extra = set(item.keys()) - allowed
             assert not extra, f"{obj_key} has keys absent from schema: {extra}"
+
+
+def test_schema_version_is_3(assets_dir):
+    assert _load_schema(assets_dir)["properties"]["schema_version"]["const"] == 3
+    assert state.SCHEMA_VERSION == 3
+
+
+def test_new_definitions_exist(assets_dir):
+    schema = _load_schema(assets_dir)
+    defs = schema["definitions"]
+    for name in ("related_finding", "risk_acceptance", "assessor_safety_event"):
+        assert name in defs, f"missing definition: {name}"
+    # finding.type taxonomy is additive/optional.
+    assert set(defs["finding"]["properties"]["type"]["enum"]) == {
+        "exposure", "attack-path", "hardening"}
+    # related_findings items are now typed objects, not bare id strings.
+    assert defs["finding"]["properties"]["related_findings"]["items"]["$ref"] == \
+        "#/definitions/related_finding"
+    assert set(defs["related_finding"]["properties"]["relationship"]["enum"]) == {
+        "contributes_to", "superseded_by", "duplicate_of"}
+    # risk_acceptance carries the lapse date.
+    assert "expires_at" in defs["risk_acceptance"]["properties"]
+
+
+def test_flat_risk_acceptance_fields_removed(assets_dir):
+    """The flat accepted_by/accepted_at fields migrated into risk_acceptance."""
+    finding_props = _load_schema(assets_dir)["definitions"]["finding"]["properties"]
+    assert "accepted_by" not in finding_props
+    assert "accepted_at" not in finding_props
+    assert "risk_acceptance" in finding_props
+
+
+def test_top_level_assessor_safety_events_declared(assets_dir):
+    schema = _load_schema(assets_dir)
+    assert "assessor_safety_events" in schema["properties"]
+    assert schema["properties"]["assessor_safety_events"]["items"]["$ref"] == \
+        "#/definitions/assessor_safety_event"

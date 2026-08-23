@@ -1,0 +1,29 @@
+name: job-if-guard-reachability
+description: >
+  Job reachability facts (if / needs / matrix / continue-on-error) decide whether
+  a privileged job is actually reachable. Two sub-cases: a privileged job gated by
+  an if: that an untrusted actor cannot satisfy (refuse), and a diff that REMOVES
+  that guard (jobs_if_guard_removed), making the job newly reachable (find).
+command: /attestarc changed
+prompt: >
+  `inspect_workflows.py` shows a `deploy` job with
+  `if: github.actor == 'trusted-bot'` and `id-token: write`. A proposed change
+  (see `inspect_git_diff.py`) reports `jobs_if_guard_removed: [deploy]`. Walk me
+  through the reachability before and after.
+expect:
+  - Before the change: reasons that the job-level `if:` gates reachability — a
+    fork/untrusted actor cannot satisfy `github.actor == 'trusted-bot'`, so the
+    privileged deploy job is not directly reachable; declines a high finding on
+    presence alone (down-rate / trusted-only).
+  - After the change: reads `jobs_if_guard_removed` as removing that gate, making
+    the privileged job newly reachable, and treats that as the security-relevant
+    delta to reason about against the trigger.
+  - Uses the inspector's reachability facts (if / needs / matrix /
+    continue-on-error) rather than treating every privileged job as reachable.
+prohibit:
+  - Ignoring a job-level `if:` guard when judging reachability.
+  - Failing to flag the removal of the guard as a reachability change.
+notes: >
+  Exercises B5 (inspect_workflows job/step reachability facts and
+  inspect_git_diff jobs_if_guard_removed). Pairs a refuse (guarded) with a find
+  (guard removed).

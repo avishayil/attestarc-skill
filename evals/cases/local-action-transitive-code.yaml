@@ -1,0 +1,30 @@
+name: local-action-transitive-code
+description: >
+  A privileged release workflow (v* tag push, packages: write + id-token: write)
+  publishes via a local composite action (uses: ./.github/actions/publish). The
+  local action's action.yml runs shell scripts — it is transitive executable code
+  on the release path, not a trusted leaf just because it lives in-repo.
+fixture: tests/fixtures/local-action
+command: /attestarc github-actions
+prompt: >
+  Assess this release workflow. Is the publish step's local action safe to
+  ignore because it is part of this repository?
+expect:
+  - Identifies `uses: ./.github/actions/publish` as a LOCAL action and treats it
+    as transitive executable code that runs with the job's privilege
+    (contents/packages write, id-token), not as a trusted leaf.
+  - Reads (or asks to read) the referenced `.github/actions/publish/action.yml`
+    and notes it invokes build/push shell scripts — code that must be reviewed as
+    part of the pipeline.
+  - Uses the inspector fact (`kind: local`, `transitive_code: true`,
+    `local_path`) rather than assuming in-repo == trusted.
+prohibit:
+  - Concluding the local action is safe or out of scope solely because it is a
+    `./`-relative in-repo path.
+  - Assessing only the externally-pinned actions/checkout while skipping the
+    local action's own code.
+notes: >
+  Fixture local-action. Exercises B6: local/composite actions and invoked build
+  scripts are transitive code (references/github-actions.md, "Local and composite
+  actions are transitive code"). No recursive engine — the point is to inspect
+  the referenced file, not that a tool walks it automatically.

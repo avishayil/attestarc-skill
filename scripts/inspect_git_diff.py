@@ -9,7 +9,8 @@ and reports the security-capability deltas that matter most for review:
 * new privileged triggers (pull_request_target, workflow_run);
 * new self-hosted runners;
 * new / newly-mutable external Action references;
-* new attacker-controlled checkout refs.
+* new attacker-controlled checkout refs;
+* job-level ``if:`` guards removed (a job made newly reachable).
 
 Facts, not findings. The host agent decides the security impact of the change.
 
@@ -228,6 +229,16 @@ def _self_hosted(wf):
     return any(j.get("self_hosted") for j in wf["jobs"]) if wf else False
 
 
+def _job_if_guards(wf):
+    """job-id -> job-level ``if:`` string, for jobs that carry a guard."""
+    return {j.get("id"): j.get("if") for j in wf["jobs"]
+            if isinstance(j.get("if"), str) and j.get("if").strip()} if wf else {}
+
+
+def _job_ids(wf):
+    return {j.get("id") for j in wf["jobs"]} if wf else set()
+
+
 def _diff_workflow(before_wf, after_wf):
     """Compute the security-capability delta between two workflow snapshots.
 
@@ -339,6 +350,20 @@ def _diff_workflow(before_wf, after_wf):
     )
     if new_untrusted_input:
         delta["new_untrusted_input_references"] = new_untrusted_input
+
+    # Reachability: a job-level ``if:`` guard removed from a job present both
+    # before and after can make a previously-gated (possibly privileged) job
+    # newly reachable. Fact only — the host weighs it against the job's privilege
+    # and the workflow's triggers.
+    before_guards = _job_if_guards(before_wf)
+    after_guards = _job_if_guards(after_wf)
+    after_ids = _job_ids(after_wf)
+    guard_removed = sorted(
+        jid for jid in before_guards
+        if jid in after_ids and jid not in after_guards
+    )
+    if guard_removed:
+        delta["jobs_if_guard_removed"] = guard_removed
 
     # New attacker-controlled checkout refs.
     new_co = sorted(_untrusted_checkout_refs(after_wf)

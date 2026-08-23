@@ -1,0 +1,27 @@
+name: require-sha-policy-downgates-mutable-ref
+description: >
+  A workflow uses a movable action ref (@v4), but the org enforces a
+  require-SHA-pinning Actions policy (observed via gh). The enforced policy is a
+  reachability down-gate: the movable ref cannot execute drifted code the usual
+  way, so this is hardening-at-most, not a reachable finding.
+command: /attestarc github-actions
+prompt: >
+  A workflow references `actions/some-action@v4` (a movable tag). Our org has
+  "require actions to be pinned to a full-length commit SHA" enforced, and I can
+  confirm it applies to this repo. How reachable is the drift risk?
+expect:
+  - Recognizes the movable ref as a real drift concern IN GENERAL, but treats the
+    enforced require-SHA-pinning policy as a reachability DOWN-GATE: under the
+    enforced policy a `@v4` ref is rejected at run time, so the usual drift path
+    is not reachable now.
+  - Down-rates from a reachable finding to hardening-at-most ("the policy would
+    have to lapse"), and still recommends SHA-pinning as the hardened state.
+  - Notes the down-gate depends on the policy actually being enforced/observed;
+    if it could not be verified it would be needs_review, not a mitigation.
+prohibit:
+  - Ignoring the enforced platform policy and rating the movable ref as directly
+    reachable arbitrary-code-execution.
+  - Turning the presence of the policy into its own finding.
+notes: >
+  Exercises B3 (SKILL.md Phase 4 / SPECIFICATION 8.2 / github-actions.md
+  "Platform mitigations as reachability down-gates"). Refuse-false-positive case.
