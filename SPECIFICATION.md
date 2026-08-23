@@ -380,8 +380,13 @@ The most important Helper. It SHALL provide `init`, `list`, `get`, `upsert`,
 
 SHALL emit structured repository facts (`git` status/remote; `detected` scm, ci,
 languages, package managers, containers, IaC, security files, workflow files) and
-no findings. When SCM is inferred locally, it SHALL indicate that remote state is
-not verified.
+no findings. Because GitHub Actions only executes workflows located in the
+repository-root `.github/workflows/`, `workflow_files` SHALL contain only
+root-level workflows (the repository's active CI); workflows found elsewhere in
+the tree (test fixtures, examples, vendored copies) SHALL be reported separately
+as `non_root_workflow_files` with a note that they are not active CI and must not
+be assessed as the repository's pipelines without confirmation. When SCM is
+inferred locally, it SHALL indicate that remote state is not verified.
 
 ### 12.3 `inspect_workflows.py`
 

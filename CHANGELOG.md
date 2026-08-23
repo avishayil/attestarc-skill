@@ -21,7 +21,11 @@ Initial release.
   IDs and JSON schema (`assets/findings.schema.json`).
 - Deterministic, stdlib-only helper scripts:
   - `state.py` — initialize, list, get, upsert, set-status, resolve, validate.
-  - `discover_repo.py` — repository / delivery-system facts.
+  - `discover_repo.py` — repository / delivery-system facts. Reports only
+    root-level `.github/workflows/` as active CI (`workflow_files`); non-root
+    workflows (fixtures, examples, vendored) are surfaced separately as
+    `non_root_workflow_files` with a note, since GitHub only executes root
+    workflows.
   - `inspect_workflows.py` — normalized GitHub Actions workflow facts.
   - `inspect_git_diff.py` — security-relevant change facts.
 - Security references: methodology, severity, github, github-actions,

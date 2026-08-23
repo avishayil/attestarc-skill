@@ -69,6 +69,36 @@ def test_git_repo_remote_and_scm(git_repo):
     assert result["detected"]["remote_slug"] == "acme/payment-service"
 
 
+def test_nested_workflows_are_not_active_ci(tmp_path):
+    """Workflows outside the repo root never execute on GitHub, so they must be
+    reported separately and must not be counted as the repo's active CI."""
+    root = str(tmp_path)
+    nested = os.path.join(root, "tests", "fixtures", "example",
+                          ".github", "workflows")
+    os.makedirs(nested)
+    with open(os.path.join(nested, "build.yml"), "w") as fh:
+        fh.write("on: push\njobs: {}\n")
+    d = dr.discover(root)["detected"]
+    assert d["workflow_files"] == []          # nothing at the real root
+    assert "github-actions" not in d["ci"]    # nested workflows are not CI
+    assert any(p.endswith("example/.github/workflows/build.yml")
+               for p in d["non_root_workflow_files"])
+    result = dr.discover(root)
+    assert any("outside the repository root" in n for n in result["notes"])
+
+
+def test_root_workflows_are_active_ci(tmp_path):
+    root = str(tmp_path)
+    wf = os.path.join(root, ".github", "workflows")
+    os.makedirs(wf)
+    with open(os.path.join(wf, "ci.yml"), "w") as fh:
+        fh.write("on: push\njobs: {}\n")
+    d = dr.discover(root)["detected"]
+    assert ".github/workflows/ci.yml" in d["workflow_files"]
+    assert d["non_root_workflow_files"] == []
+    assert "github-actions" in d["ci"]
+
+
 def test_detects_docker_and_terraform(tmp_path):
     root = str(tmp_path)
     with open(os.path.join(root, "Dockerfile"), "w") as fh:
