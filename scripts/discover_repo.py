@@ -124,6 +124,33 @@ def _normalize_remote(remote: str | None) -> str | None:
     return remote
 
 
+def _redact_remote(remote: str | None) -> dict:
+    """Strip embedded credentials from a remote URL before emitting it.
+
+    A remote can carry a token in its userinfo (e.g.
+    ``https://x-access-token:ghs_...@github.com/o/r.git``). AttestArc must never
+    persist or print that value, so this returns only ``{host, slug,
+    redacted_url}`` with the userinfo removed.
+    """
+    if not remote:
+        return {"host": None, "slug": None, "redacted_url": None}
+    # Remove scheme://user:pass@  (keeps scheme://host/...).
+    redacted = re.sub(r"(://)[^/@]+@", r"\1", remote)
+    host = None
+    m = re.search(r"://([^/]+)/", redacted)
+    if m:
+        host = m.group(1)
+    else:  # scp-like: [user@]host:path
+        m2 = re.match(r"(?:[^@/]+@)?([^:/]+):", redacted)
+        if m2:
+            host = m2.group(1)
+    return {
+        "host": host,
+        "slug": _normalize_remote(redacted),
+        "redacted_url": redacted,
+    }
+
+
 def _exists(root: str, rel: str) -> bool:
     return os.path.exists(os.path.join(root, rel))
 
@@ -135,10 +162,18 @@ def discover(root: str) -> dict:
         _run_git(["rev-parse", "--is-inside-work-tree"], root) == "true"
     )
     remote_raw = _run_git(["remote", "get-url", "origin"], root) if is_git else None
+    # The checked-out branch is NOT necessarily the repository's default branch.
+    # Protected-ref reasoning must not treat the current branch as the default.
+    current_branch = None
     default_branch = None
     if is_git:
         head = _run_git(["symbolic-ref", "--quiet", "--short", "HEAD"], root)
-        default_branch = head or None
+        current_branch = head or None
+        origin_head = _run_git(
+            ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], root
+        )
+        if origin_head and origin_head.startswith("origin/"):
+            default_branch = origin_head[len("origin/"):]
 
     ci: set[str] = set()
     for marker, value in _CI_MARKERS.items():
@@ -220,16 +255,19 @@ def discover(root: str) -> dict:
     if helm:
         iac.append("helm")
 
+    redacted = _redact_remote(remote_raw)
     result = {
         "git": {
             "repository": bool(is_git),
-            "remote": remote_raw,
+            "remote": redacted["redacted_url"],
+            "remote_host": redacted["host"],
+            "current_branch": current_branch,
             "default_branch": default_branch,
         },
         "detected": {
             "scm": scm,
             "scm_verified_remotely": False,
-            "remote_slug": _normalize_remote(remote_raw),
+            "remote_slug": redacted["slug"],
             "ci": sorted(ci),
             "languages": sorted(languages),
             "package_managers": sorted(package_managers),
@@ -255,6 +293,13 @@ def discover(root: str) -> dict:
         result["notes"].append(
             "SCM inferred locally. Remote settings (branch protection, rulesets, "
             "environments) are not verified here."
+        )
+    if is_git and default_branch is None:
+        result["notes"].append(
+            "Default branch could not be determined locally (no "
+            "refs/remotes/origin/HEAD). 'current_branch' is the checked-out "
+            "branch, which may not be the default; verify the default branch "
+            "before reasoning about protected-branch controls."
         )
     if non_root_workflow_files:
         result["notes"].append(

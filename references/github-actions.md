@@ -94,19 +94,35 @@ a `download-artifact` action or a `run_steps` fetch.
 
 ### Cache poisoning
 
-The Actions cache is a **trust boundary**, not just a speed optimization. Caches
-are scoped per branch with fallback to the default branch, and a fork PR's job
-can write a cache key that a later privileged run on a protected branch restores.
-If the cached content is executable (compiled binaries, `node_modules`, a
+The Actions cache is a **trust boundary**, not just a speed optimization: cache
+entries are not signed or verified. What decides reachability is the **scope**
+rule — GitHub scopes each cache entry to the git ref that created it, and a run
+restores from its own ref with fallback to the repository's **default branch**
+(and, for a pull request, its base branch). Reason about *who can write the scope
+the privileged run restores from*:
+
+- A **fork `pull_request`** run is isolated: its token is read-only and any cache
+  it writes is confined to that PR's own scope. It **cannot** write an entry that
+  a later run on the default or a protected branch will restore. The often-repeated
+  "a fork PR poisons the default-branch cache" chain does **not** close — do not
+  flag it on that basis.
+- The cache *is* poisonable by an actor who can cause code to run **in a base-repo
+  ref scope** with cache-write access: a lower-privileged collaborator pushing a
+  topic branch, or a `pull_request_target` / `issue_comment` / `workflow_run` run
+  a fork influenced (these run in the base repo, in a branch scope, with a
+  writable token). Whatever such a run writes into a branch scope, a privileged
+  run on that branch — or one that falls back to it — can later restore.
+
+If the restored content is executable (compiled binaries, `node_modules`, a
 toolchain, a downloaded dependency) and a privileged job runs it, an attacker who
-poisoned the cache achieves `EXECUTE_UNTRUSTED_CODE` in the privileged context.
+poisoned that scope achieves `EXECUTE_UNTRUSTED_CODE` in the privileged context.
 
 `uses_cache: true` on a job is the presence fact. To close the chain ask: can a
-low-trust actor populate the key the privileged job restores, and does the
-privileged job *execute* what it restored (vs merely reading data)? Category:
-`cache-trust-boundary`. Remediation directions: scope/segment cache keys so
-untrusted runs cannot write keys trusted runs read, or avoid restoring caches in
-privileged jobs that execute the restored content.
+low-trust actor populate the key **in a scope** the privileged job restores from,
+and does the privileged job *execute* what it restored (vs merely reading data)?
+Category: `cache-trust-boundary`. Remediation directions: scope/segment cache keys
+so untrusted-writable refs cannot populate keys trusted runs read, or avoid
+restoring caches in privileged jobs that execute the restored content.
 
 ## Token permissions
 

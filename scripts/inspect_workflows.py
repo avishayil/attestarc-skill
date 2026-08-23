@@ -64,8 +64,13 @@ _UNTRUSTED_REF_NEEDLES = (
 # is a fact (the matched command line), not a verdict -- the host decides
 # whether it matters given the job's trigger and privilege.
 _FETCH_EXEC_PATTERNS = (
-    # curl/wget ... | sh|bash|zsh (optionally sudo, optional path prefix)
-    re.compile(r"\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?\S*sh\b"),
+    # curl/wget ... | <interpreter>  (optionally sudo, optional path prefix).
+    # Covers shells (sh/bash/zsh) and language interpreters piped straight from
+    # the network (e.g. ``curl ... | python3 -``, ``| node``, ``| ruby``).
+    re.compile(
+        r"\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?\S*"
+        r"(?:sh|bash|zsh|python3?|perl|ruby|node|php)\b"
+    ),
     # curl/wget ... && chmod +x  (download, make executable, then run)
     re.compile(r"\b(?:curl|wget)\b[^\n]*&&\s*chmod\s+\+x"),
     # PowerShell: Invoke-WebRequest/Invoke-RestMethod ... | iex
@@ -112,6 +117,13 @@ def _preprocess(text: str):
         stripped_full = _strip_comment(expanded)
         if stripped_full.strip() == "":
             records.append(_Line(-1, "", raw))  # blank/comment marker
+            continue
+        if stripped_full.strip() in ("---", "..."):
+            # YAML document start/end markers. A workflow is a single document,
+            # so these carry no mapping content; treat them like blank lines so
+            # a leading ``---`` is not mistaken for a block-sequence item (which
+            # would make the whole file parse as a list and drop every fact).
+            records.append(_Line(-1, "", raw))
             continue
         indent = len(stripped_full) - len(stripped_full.lstrip(" "))
         records.append(_Line(indent, stripped_full.strip(), raw))
@@ -231,8 +243,17 @@ class _Parser:
         if rest == "":
             # Nested block, or empty value.
             j = self._next_significant()
-            if j < len(self.lines) and self.lines[j].indent > indent:
-                return key, self.parse_node(self.lines[j].indent)
+            if j < len(self.lines):
+                nxt = self.lines[j]
+                if nxt.indent > indent:
+                    return key, self.parse_node(nxt.indent)
+                # A block sequence may be indented at the SAME column as the
+                # mapping key it belongs to (a common GitHub Actions style,
+                # e.g. ``steps:`` and its ``- `` items both at one indent).
+                # Only a sequence can share the key's indent; a sibling mapping
+                # key would appear as ``key:``, not ``-``.
+                if nxt.indent == indent and nxt.content.startswith("-"):
+                    return key, self._parse_seq(nxt.indent)
             return key, None
         return key, _scalar(rest)
 
@@ -378,6 +399,21 @@ def _step_uses_cache(action, step):
     return False
 
 
+def _run_excerpt(run_text, limit=200):
+    """A compact, whitespace-normalized excerpt of a ``run:`` block.
+
+    Workflow source, not runtime data, so there is no secret to redact here;
+    the excerpt exists so the host can see what a privileged step executes
+    (e.g. ``make release`` vs ``curl ... | sh``) without re-reading the file.
+    """
+    if not isinstance(run_text, str):
+        return None
+    collapsed = " ".join(run_text.split())
+    if len(collapsed) > limit:
+        return collapsed[:limit] + "..."
+    return collapsed
+
+
 def _fetch_execute_facts(run_text):
     """Detect a fetch-then-execute command; return (bool, excerpt|None)."""
     if not isinstance(run_text, str):
@@ -389,21 +425,50 @@ def _fetch_execute_facts(run_text):
     return False, None
 
 
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _classify_docker(uses: str):
+    """Classify a ``docker://`` action reference and its pin state.
+
+    A container image is immutable only when pinned by digest
+    (``image@sha256:<64 hex>``). A ``:tag`` reference — and an implicit
+    ``latest`` when no tag is given — is mutable and can be repointed after
+    review, so ``pinned`` is ``False`` for both. Registry ports
+    (``host:5000/img:tag``) are handled by only treating a ``:`` that follows
+    the final ``/`` as the tag separator.
+    """
+    body = uses[len("docker://"):]
+    if "@" in body:
+        name, ref = body.split("@", 1)
+        return {"name": f"docker://{name}", "ref": ref,
+                "pinned": bool(_DIGEST.match(ref)), "kind": "docker",
+                "uses": uses}
+    last_slash = body.rfind("/")
+    tail = body[last_slash + 1:]
+    if ":" in tail:
+        tail_name, tag = tail.rsplit(":", 1)
+        name = body[:last_slash + 1] + tail_name
+        return {"name": f"docker://{name}", "ref": tag, "pinned": False,
+                "kind": "docker", "uses": uses}
+    # No tag at all -> implicit :latest, which is mutable.
+    return {"name": f"docker://{body}", "ref": None, "pinned": False,
+            "kind": "docker", "uses": uses}
+
+
 def _classify_action(uses: str):
     uses = uses.strip()
+    if uses.startswith(("./", "../")):
+        return {"name": uses, "ref": None, "pinned": None, "kind": "local",
+                "uses": uses}
+    if uses.startswith("docker://"):
+        return _classify_docker(uses)
     kind = "external"
     name, ref = uses, None
-    if uses.startswith(("./", "../")):
-        kind = "local"
-        name = uses
-    elif uses.startswith("docker://"):
-        kind = "docker"
-        name = uses
-    else:
-        if "@" in uses:
-            name, ref = uses.rsplit("@", 1)
-        if re.search(r"\.ya?ml$", name) or "/.github/workflows/" in name:
-            kind = "reusable-workflow"
+    if "@" in uses:
+        name, ref = uses.rsplit("@", 1)
+    if re.search(r"\.ya?ml$", name) or "/.github/workflows/" in name:
+        kind = "reusable-workflow"
     pinned = None
     if ref is not None:
         pinned = bool(_SHA40.match(ref))
@@ -481,12 +546,20 @@ def _inspect_job(name, job):
                     checkout_refs.append(co)
                 if _step_uses_cache(action, step):
                     uses_cache = True
+            run_text = step.get("run")
+            has_run = isinstance(run_text, str)
             exprs, untrusted = _scan_run_text(step)
-            fetch_exec, fetch_excerpt = _fetch_execute_facts(step.get("run"))
-            if exprs or fetch_exec:
+            fetch_exec, fetch_excerpt = _fetch_execute_facts(run_text)
+            # Emit a record for every step that runs a command (``run:``), that
+            # references attacker-influenced input, or that fetches-and-executes.
+            # A benign ``uses:`` step whose only expressions are trusted (e.g.
+            # ``${{ matrix.os }}``) is not command execution and is left to the
+            # ``actions`` list, so it no longer masquerades as a run step.
+            if has_run or untrusted or fetch_exec:
                 run_steps.append({
                     "name": step.get("name"),
-                    "has_run": isinstance(step.get("run"), str),
+                    "has_run": has_run,
+                    "run_excerpt": _run_excerpt(run_text) if has_run else None,
                     "expressions": exprs,
                     "references_untrusted_input": untrusted,
                     "fetch_execute": fetch_exec,

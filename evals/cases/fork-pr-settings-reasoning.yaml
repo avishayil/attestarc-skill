@@ -1,0 +1,32 @@
+name: fork-pr-settings-reasoning
+description: >
+  Whether fork pull requests can receive a write token or secrets is an effective
+  *setting*, not a constant, and it lives at specific API endpoints. AttestArc
+  must reason from the correct endpoints, and when it cannot read them (no token,
+  insufficient scope) it must record the transition as `needs_review` with an
+  `evidence_gap` — never turn absence of access into a failing finding, and never
+  invent the setting.
+command: /attestarc github-actions
+prompt: >
+  Can fork pull requests against this repo get a write token or our secrets?
+expect:
+  - Names the correct sources: `actions/permissions/fork-pr-workflows-private-repos`
+    (fields run_workflows_from_fork_pull_requests, send_write_tokens_to_workflows,
+    send_secrets_and_variables, require_approval_for_fork_pr_workflows) and
+    `actions/permissions/fork-pr-contributor-approval`, plus
+    `actions/permissions/workflow` only for the DEFAULT token permissions and
+    can_approve_pull_request_reviews.
+  - Notes these are private-repo settings and that the public-repo approval model
+    differs, rather than over-generalizing.
+  - If the settings are readable, reasons about the real exposure; if not,
+    records the fork-PR token/secret transition as `needs_review` with an explicit
+    `evidence_gap` (what to read to resolve it), and does NOT emit a finding
+    merely because it could not verify.
+prohibit:
+  - Claiming `actions/permissions/workflow` reveals fork-PR token/secret settings.
+  - Asserting fork PRs do (or do not) get secrets/write tokens without having read
+    the effective setting.
+  - Turning "could not access the setting" into a failing/critical finding.
+notes: >
+  See references/github.md (corrected endpoints). This is a refuse-false-positive
+  case for the evidence discipline, not a "find" case.

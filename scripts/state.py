@@ -38,7 +38,15 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 1
+# Bumped to 2 in v0.3.0: finding ids widened to 8 hex chars and the fingerprint
+# no longer hashes the free-text ``condition`` (it hashes a canonical
+# ``subject`` instead), so ids from schema_version 1 are not comparable.
+SCHEMA_VERSION = 2
+
+# Persisted string leaves are capped so a hostile tool result cannot turn
+# durable state into a multi-megabyte prompt-injection payload.
+_MAX_STRING_LEN = 4000
+_TRUNCATION_MARKER = "…[truncated by AttestArc]"
 
 SEVERITIES = ("critical", "high", "medium", "low")
 CONFIDENCES = ("high", "medium", "low")
@@ -93,14 +101,33 @@ def _now() -> str:
 # --------------------------------------------------------------------------- #
 # Stable identifiers
 # --------------------------------------------------------------------------- #
+def _canonicalize(part: str) -> str:
+    """Normalize a fingerprint component so cosmetic differences don't drift ids.
+
+    Lower-cases, converts backslashes to forward slashes, collapses repeated
+    slashes, and strips surrounding whitespace. This keeps ``.github\\Workflows``
+    and ``.github/workflows`` (and re-worded casing) mapping to one finding.
+    """
+    if not part:
+        return ""
+    s = str(part).strip().lower().replace("\\", "/")
+    return re.sub(r"/{2,}", "/", s)
+
+
 def compute_fingerprint(domain: str, category: str, resource: str,
-                        condition: str = "") -> str:
+                        subject: str = "") -> str:
     """Stable sha256 fingerprint of the risky condition.
+
+    Hashes ``domain | category | canonical(resource) | canonical(subject)``.
+    The free-text ``condition`` is deliberately NOT part of the fingerprint:
+    re-wording the human explanation of the same issue must not mint a new id.
+    ``subject`` is an optional stable machine key (e.g. an action ref or job
+    name) used to disambiguate two distinct issues on the same resource.
 
     Independent of run order, so a finding survives across sessions.
     """
     normalized = "|".join(
-        part.strip() for part in (domain, category, resource, condition)
+        _canonicalize(part) for part in (domain, category, resource, subject)
     )
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
@@ -123,7 +150,7 @@ def id_prefix(domain: str, category: str = "", resource: str = "") -> str:
 def display_id(fingerprint: str, domain: str, category: str = "",
                resource: str = "", prefix: str | None = None) -> str:
     pfx = prefix or id_prefix(domain, category, resource)
-    return f"AA-{pfx}-{fingerprint[:6].upper()}"
+    return f"AA-{pfx}-{fingerprint[:8].upper()}"
 
 
 # --------------------------------------------------------------------------- #
@@ -164,29 +191,53 @@ def _iter_strings(value):
             yield from _iter_strings(v)
 
 
+def _iter_string_paths(value, prefix: str = ""):
+    """Yield (path, string) for every string leaf, for precise error messages."""
+    if isinstance(value, str):
+        yield prefix or "<root>", value
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            child = f"{prefix}.{k}" if prefix else str(k)
+            yield from _iter_string_paths(v, child)
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            child = f"{prefix}[{i}]"
+            yield from _iter_string_paths(v, child)
+
+
 def _assert_no_secrets(finding: dict) -> None:
-    # Evidence: prefer small structured facts, but scan every free-text field.
-    for ev in finding.get("evidence", []) or []:
-        if not isinstance(ev, dict):
-            continue
-        for field in ("observed", "value", "key"):
-            text = ev.get(field, "")
-            if isinstance(text, str) and looks_like_secret(text):
-                raise StateError(
-                    f"refusing to persist finding: evidence {field!r} appears "
-                    "to contain a raw secret value. Store only metadata "
-                    "(secret name/source), never the value itself."
-                )
-    # Threat reasoning is free-form; make sure no secret leaked into it.
-    threat = finding.get("threat")
-    if isinstance(threat, (dict, list)):
-        for text in _iter_strings(threat):
-            if looks_like_secret(text):
-                raise StateError(
-                    "refusing to persist finding: 'threat' appears to contain "
-                    "a raw secret value. Describe the attack path with "
-                    "metadata, never secret values."
-                )
+    """Reject a finding if a raw secret value appears in ANY string leaf.
+
+    The secret guard used to cover only ``evidence.{observed,value,key}`` and
+    ``threat``; a value leaked into ``title``, ``impact``, ``remediation``,
+    ``verification``, ``reason``, or an ``extensions`` field would have been
+    persisted. The whole finding is now walked.
+    """
+    for path, text in _iter_string_paths(finding):
+        if looks_like_secret(text):
+            raise StateError(
+                f"refusing to persist finding: {path} appears to contain a raw "
+                "secret value. Store only metadata (secret name/source), never "
+                "the value itself."
+            )
+
+
+def _cap_strings(value):
+    """Return a copy of ``value`` with over-long string leaves truncated.
+
+    Bounds the durable size of any single field so a hostile tool result cannot
+    inflate ``findings.json`` into a giant, re-loaded prompt-injection payload.
+    """
+    if isinstance(value, str):
+        if len(value) > _MAX_STRING_LEN:
+            keep = _MAX_STRING_LEN - len(_TRUNCATION_MARKER)
+            return value[:keep] + _TRUNCATION_MARKER
+        return value
+    if isinstance(value, dict):
+        return {k: _cap_strings(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_cap_strings(v) for v in value]
+    return value
 
 
 # --------------------------------------------------------------------------- #
@@ -207,7 +258,39 @@ def _dump(state: dict) -> str:
     return json.dumps(state, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
 
 
-def _atomic_write(path: str, text: str) -> None:
+def _assert_within_root(path: str, root: str) -> None:
+    """Refuse to touch ``path`` unless it resolves to inside ``root``.
+
+    Resolves the deepest existing ancestor with ``realpath`` so a symlink at
+    ``.attestarc`` (or any parent) that escapes the repository — e.g. pointing
+    at ``~/.ssh`` or a sibling checkout — is detected even before the file is
+    created. Assessment is read-only and state is repo-local; a write that lands
+    outside the repository root is always a trap, never legitimate.
+    """
+    root_real = os.path.normpath(os.path.realpath(root))
+    target = os.path.abspath(path)
+    ancestor = target
+    while not os.path.exists(ancestor):
+        parent = os.path.dirname(ancestor)
+        if parent == ancestor:
+            break
+        ancestor = parent
+    ancestor_real = os.path.realpath(ancestor)
+    suffix = os.path.relpath(target, ancestor)
+    resolved = (ancestor_real if suffix == "."
+                else os.path.normpath(os.path.join(ancestor_real, suffix)))
+    if resolved != root_real and not resolved.startswith(root_real + os.sep):
+        raise StateError(
+            f"refusing to write outside the repository root: {path} resolves to "
+            f"{resolved}, which is not under {root_real}. This happens when "
+            ".attestarc (or a parent) is a symlink escaping the repository; the "
+            "repository is untrusted input and cannot redirect AttestArc's writes."
+        )
+
+
+def _atomic_write(path: str, text: str, root: str | None = None) -> None:
+    if root is not None:
+        _assert_within_root(path, root)
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".findings-", suffix=".tmp")
@@ -222,9 +305,9 @@ def _atomic_write(path: str, text: str) -> None:
             os.unlink(tmp)
 
 
-def save_state(state: dict, path: str) -> None:
+def save_state(state: dict, path: str, root: str | None = None) -> None:
     state["updated_at"] = _now()
-    _atomic_write(path, _dump(state))
+    _atomic_write(path, _dump(state), root=root)
 
 
 def _backup_corrupt(path: str) -> str:
@@ -301,7 +384,7 @@ def validate_state(state: dict) -> list[str]:
                 err(f"{where} missing required field: {key}")
         fid = f.get("id")
         if isinstance(fid, str):
-            if not re.fullmatch(r"AA-[A-Z]{2,4}-[0-9A-F]{6}", fid):
+            if not re.fullmatch(r"AA-[A-Z]{2,4}-[0-9A-F]{8}", fid):
                 err(f"{where}.id has invalid format: {fid!r}")
             if fid in seen_ids:
                 err(f"{where}.id is duplicated: {fid}")
@@ -355,16 +438,18 @@ def normalize_finding(finding: dict) -> dict:
         raise StateError("finding.category is required")
 
     resource = f.get("resource", "")
-    condition = f.get("condition", "")
+    # ``subject`` is a stable machine key for disambiguation and feeds the
+    # fingerprint; ``condition`` stays a human field and does NOT.
+    subject = f.get("subject", "")
 
     fp = f.get("fingerprint")
     if not fp:
         if not resource:
             raise StateError(
                 "finding requires either 'fingerprint' or 'resource' "
-                "(plus optional 'condition') to derive a stable id"
+                "(plus optional 'subject') to derive a stable id"
             )
-        fp = compute_fingerprint(domain, category, resource, condition)
+        fp = compute_fingerprint(domain, category, resource, subject)
         f["fingerprint"] = fp
     elif not re.fullmatch(r"[0-9a-f]{64}", fp):
         raise StateError("finding.fingerprint must be a sha256 hex digest")
@@ -373,6 +458,8 @@ def normalize_finding(finding: dict) -> dict:
         f["id"] = display_id(
             fp, domain, category, resource, prefix=f.get("id_prefix")
         )
+    # id_prefix is an input-only hint; do not persist it as a finding field.
+    f.pop("id_prefix", None)
 
     f.setdefault("severity", "medium")
     f.setdefault("confidence", "medium")
@@ -390,6 +477,9 @@ def normalize_finding(finding: dict) -> dict:
         raise StateError("finding.evidence must be an array")
 
     _assert_no_secrets(f)
+    # Secret scan runs on the original text; cap only afterwards so truncation
+    # can never split a secret across the boundary and evade detection.
+    f = _cap_strings(f)
     return f
 
 
@@ -420,8 +510,8 @@ def upsert_finding(state: dict, finding: dict) -> tuple[dict, bool]:
             # Refresh the observable, agent-supplied fields.
             for key in ("title", "severity", "confidence", "impact",
                         "remediation", "verification", "category", "domain",
-                        "resource", "condition", "threat", "trust_boundary",
-                        "related_findings"):
+                        "resource", "subject", "condition", "threat",
+                        "trust_boundary", "related_findings"):
                 if key in incoming:
                     merged[key] = incoming[key]
             merged["evidence"] = _merge_evidence(
@@ -464,6 +554,8 @@ def ensure_git_exclude(root: str = ".") -> str | None:
         return None
     info_dir = os.path.join(git_dir, "info")
     exclude = os.path.join(info_dir, "exclude")
+    # A symlinked .git escaping the repository is untrusted; never follow it.
+    _assert_within_root(exclude, root)
     entry = ".attestarc/"
     existing = ""
     if os.path.exists(exclude):
@@ -497,7 +589,7 @@ def cmd_init(args) -> int:
                   "findings": len(state.get("findings", []))}
     else:
         state = _empty_state(root=args.root)
-        save_state(state, path)
+        save_state(state, path, root=args.root)
         result = {"status": "created", "file": path, "findings": 0}
 
     excluded = ensure_git_exclude(args.root)
@@ -552,7 +644,7 @@ def cmd_upsert(args) -> int:
     state = load_state(args.file)
     finding = _read_finding_input(args.source)
     stored, created = upsert_finding(state, finding)
-    save_state(state, args.file)
+    save_state(state, args.file, root=args.root)
     print(json.dumps(
         {"action": "created" if created else "updated", "id": stored["id"],
          "fingerprint": stored["fingerprint"], "status": stored["status"]},
@@ -581,7 +673,7 @@ def cmd_set_status(args) -> int:
             f["reason"] = args.reason
     elif args.reason:
         f["reason"] = args.reason
-    save_state(state, args.file)
+    save_state(state, args.file, root=args.root)
     print(json.dumps({"id": f["id"], "status": f["status"]}, indent=2))
     return 0
 
@@ -614,7 +706,7 @@ def cmd_resolve(args) -> int:
             return 1
         verification["observed"] = args.observed
     f["verification"] = verification
-    save_state(state, args.file)
+    save_state(state, args.file, root=args.root)
     print(json.dumps({"id": f["id"], "status": "resolved",
                       "verification": verification["status"]}, indent=2))
     return 0
@@ -641,49 +733,92 @@ def cmd_validate(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="AttestArc findings state manager")
     p.add_argument("--file", default=DEFAULT_FILE,
-                   help="path to findings.json (default: .attestarc/findings.json)")
+                   help="path to findings.json (default: <root>/.attestarc/findings.json)")
     sub = p.add_subparsers(dest="command", required=True)
 
-    sp = sub.add_parser("init", help="initialize findings state")
-    sp.add_argument("--root", default=".", help="repository root")
+    # --root is accepted on every subcommand: it confines all writes to the
+    # assessed repository and is the base for a relative --file, so the skill
+    # can invoke this helper from its own package directory.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--root", default=None,
+                        help="assessed repository root; confines all writes and "
+                             "is the base for a relative --file. When omitted, "
+                             "it is inferred from --file (the directory that "
+                             "contains .attestarc).")
+
+    sp = sub.add_parser("init", parents=[common], help="initialize findings state")
     sp.add_argument("--force", action="store_true",
                     help="reinitialize even if the file exists")
     sp.set_defaults(func=cmd_init)
 
-    sp = sub.add_parser("list", help="list findings (facts)")
+    sp = sub.add_parser("list", parents=[common], help="list findings (facts)")
     sp.add_argument("--status", choices=STATUSES)
     sp.add_argument("--domain", choices=DOMAINS)
     sp.set_defaults(func=cmd_list)
 
-    sp = sub.add_parser("get", help="get a finding by id")
+    sp = sub.add_parser("get", parents=[common], help="get a finding by id")
     sp.add_argument("id")
     sp.set_defaults(func=cmd_get)
 
-    sp = sub.add_parser("upsert", help="insert or update a finding from JSON")
+    sp = sub.add_parser("upsert", parents=[common],
+                        help="insert or update a finding from JSON")
     sp.add_argument("source", help="path to a finding JSON file, or '-' for stdin")
     sp.set_defaults(func=cmd_upsert)
 
-    sp = sub.add_parser("set-status", help="change a finding's status")
+    sp = sub.add_parser("set-status", parents=[common],
+                        help="change a finding's status")
     sp.add_argument("id")
     sp.add_argument("status", choices=STATUSES)
     sp.add_argument("--reason")
     sp.add_argument("--by")
     sp.set_defaults(func=cmd_set_status)
 
-    sp = sub.add_parser("resolve", help="mark a finding resolved (after verify)")
+    sp = sub.add_parser("resolve", parents=[common],
+                        help="mark a finding resolved (after verify)")
     sp.add_argument("id")
     sp.add_argument("--method")
     sp.add_argument("--observed")
     sp.set_defaults(func=cmd_resolve)
 
-    sp = sub.add_parser("validate", help="validate the findings file")
+    sp = sub.add_parser("validate", parents=[common],
+                        help="validate the findings file")
     sp.set_defaults(func=cmd_validate)
 
     return p
 
 
+def _resolve_root_and_file(args) -> None:
+    """Resolve the findings ``--file`` path and the write-confinement ``--root``.
+
+    Two invocation styles, both safe:
+
+    * With an explicit ``--root`` (how the skill invokes this from its own
+      package directory): a relative ``--file`` is taken under that root and
+      every write is confined to it.
+    * Without ``--root``: the (possibly absolute) ``--file`` location is
+      trusted as-is, and the confinement root is *inferred* from it — the
+      directory that contains ``.attestarc`` if the file lives there, else the
+      file's own directory. A symlinked ``.attestarc`` that escapes that
+      inferred root is still refused by ``_assert_within_root``.
+
+    Defaulting ``--root`` to ``.`` used to break the common case of pointing an
+    absolute ``--file`` at another repository: the write was wrongly refused as
+    "outside the repository root" because the root was still the skill's CWD.
+    """
+    explicit_root = getattr(args, "root", None)
+    if not os.path.isabs(args.file):
+        args.file = os.path.join(explicit_root or ".", args.file)
+    if explicit_root is not None:
+        args.root = explicit_root
+        return
+    parent = os.path.dirname(os.path.abspath(args.file))
+    args.root = (os.path.dirname(parent)
+                 if os.path.basename(parent) == ".attestarc" else parent)
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    _resolve_root_and_file(args)
     try:
         return args.func(args)
     except StateError as exc:

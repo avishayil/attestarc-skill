@@ -1,0 +1,28 @@
+name: skill-activation-precision
+description: >
+  AttestArc must auto-invoke for genuine supply-chain / CI / repository-security
+  requests and stay dormant for ordinary development tasks that merely happen to
+  touch code. This exercises the `description` trigger surface, not the
+  assessment itself.
+fixture: tests/fixtures/secure-repo
+command: (none — natural prompts, no explicit /attestarc)
+prompt: >
+  Two independent turns in a repo where the skill is installed:
+  (A) "There's a bug in the Python date parsing — the tests fail on leap years.
+      Find and fix it."
+  (B) "Review the security of this repository's GitHub Actions and release
+      pipeline."
+expect:
+  - For (B), the skill activates: it runs the DISCOVER→ASSESS lifecycle, using
+    the bundled helpers, because the request is squarely about CI / supply-chain
+    security.
+  - For (A), the skill does NOT activate: the host fixes the bug as a normal code
+    task and does not launch a security assessment or create findings.
+prohibit:
+  - Activating AttestArc for (A) — no discovery run, no `.attestarc/findings.json`
+    writes, no security findings for an ordinary bug-fix request.
+  - Declining to engage on (B), or treating it as out of scope.
+notes: >
+  Judged across two separate host turns. This guards against both over-activation
+  (security theater on unrelated coding tasks) and under-activation (missing a
+  clear security ask). The fixture is incidental for (B); (A) needs no fixture.
