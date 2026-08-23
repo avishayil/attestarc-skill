@@ -4,7 +4,7 @@ Security expertise for your coding agent.
 
 [![CI](https://github.com/avishayil/attestarc-skill/actions/workflows/ci.yml/badge.svg)](https://github.com/avishayil/attestarc-skill/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Getting started](https://img.shields.io/badge/docs-getting%20started-22C55E.svg)](https://avishayil.github.io/attestarc-skill/)
+[![Getting started](https://img.shields.io/badge/docs-getting%20started-38BDF8.svg)](https://avishay.co.il/attestarc-skill/)
 
 Install AttestArc into Claude Code (or wire it into Cursor) and run:
 
@@ -19,7 +19,7 @@ No compliance report.
 
 It works inside the repository, with the coding agent you already use.
 
-**New here?** Start with the [getting-started site](https://avishayil.github.io/attestarc-skill/).
+**New here?** Start with the [getting-started site](https://avishay.co.il/attestarc-skill/).
 
 ---
 
