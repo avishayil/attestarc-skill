@@ -1,0 +1,27 @@
+name: Deploy
+
+# Runs from the protected default branch after merge — a trusted context, not a
+# fork-PR one. The interesting fact here is HOW the third-party Actions are
+# referenced, not who can trigger the workflow.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      # Immutable — pinned to a full commit SHA.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # Movable, but a cut release version tag.
+      - uses: some-vendor/setup-tool@v3
+      # Movable AND branch-tracking: the maintainer can repoint main to any
+      # commit at any time, with no version bump in this repository.
+      - uses: internal-tools/deployer@main
+      - name: Deploy
+        run: ./deploy.sh

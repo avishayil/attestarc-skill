@@ -1,0 +1,31 @@
+name: trigger-qualifier-release-scope
+description: >
+  The release workflow holds id-token: write and packages: write but is
+  triggered ONLY by push on tags matching v* — a maintainer cutting a release,
+  not an arbitrary branch push or fork PR. The agent must read the trigger's
+  qualifiers (trigger_details), not just the bare event name, before judging
+  reachability of the privileged token.
+fixture: tests/fixtures/supply-chain
+command: /attestarc github-actions
+prompt: >
+  Is the elevated token in the release workflow reachable by an untrusted actor?
+expect:
+  - Reads that the push trigger is scoped to tags (v*) with no branches, and
+    concludes this is a release/tag trigger fired by cutting a tag, not an
+    everyday branch push.
+  - Reasons that an untrusted fork PR cannot fire this workflow, and that pushing
+    a v* tag requires write/tag-creation access — so id-token: write /
+    packages: write is not directly fork-reachable here.
+  - If tag protection / who-can-create-tags is not observable, records that
+    transition as an evidence_gap / needs_review rather than assuming it.
+  - Keeps the mutable third-party Docker refs in this workflow as their own
+    (conditional) finding, separate from the trigger-reachability question.
+prohibit:
+  - Flagging id-token: write or packages: write as critical because a fork PR
+    could exploit it (the trigger_details show a tags-only push, so it cannot).
+  - Ignoring the tags qualifier and treating the push as an unrestricted
+    branch/PR-reachable trigger.
+notes: >
+  Exercises the v0.3.1 trigger_details fidelity: push.tags vs push.branches vs
+  pull_request(_target) changes reachability. Refuse-false-positive on the token;
+  the mutable-ref finding stands on its own merits (see docker-action-mutable-tag).

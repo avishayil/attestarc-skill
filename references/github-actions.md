@@ -12,12 +12,15 @@ to observe and remediate them on GitHub Actions.
 
 ## What to gather first
 
-Run `python scripts/inspect_workflows.py`. For each workflow you get: `triggers`,
-workflow-level `permissions`, and per-job `runner`/`self_hosted`, `environment`,
+Run `python scripts/inspect_workflows.py`. For each workflow you get: `triggers`
+(flat event names) and `trigger_details` (per-event `branches`/`tags`/`paths`/
+`types` and `schedule.cron` — see Triggers below), workflow-level `permissions`,
+and per-job `runner`/`self_hosted`, `environment`,
 `permissions`, `uses` / `uses_pinned` (job-level reusable-workflow call and
 whether it is SHA-pinned), `secrets` (what a reusable-workflow call passes —
 `"inherit"`, a name→source map, or none), `uses_cache` (the job reads/writes an
-Actions cache), `actions[]` (`name`, `ref`, `pinned`, `kind`), `run_steps[]`
+Actions cache), `actions[]` (`name`, `ref`, `pinned`, `ref_kind`,
+`looks_like_version`, `kind` — see External Actions and pinning), `run_steps[]`
 (`expressions`, `references_untrusted_input`, `fetch_execute`,
 `fetch_execute_excerpt`), and `checkout_refs[]` (`references_untrusted_ref`).
 `parse_partial: true` means read the raw file before concluding. These are
@@ -52,6 +55,22 @@ file. Reason from the default, but treat the effective setting as an
 `evidence_gap`: if it is unverifiable, record the affected transition as
 `needs_review` rather than assuming the default holds (correlate with
 `references/github.md` remote-state discovery).
+
+**Read the qualifiers, not just the event name.** `trigger_details` scopes
+*where* an event fires, and the scope changes reachability:
+
+- `push` restricted to `tags: [v*]` (and no `branches`) is a **release** trigger,
+  not an everyday branch push — it fires when a maintainer cuts a tag, so it is a
+  natural home for publish/`id-token` steps. `push` with `branches: [main]` is the
+  post-merge default-branch path. A `push` with neither is broad. Do not treat a
+  tags-only release push as an unrestricted branch push (a false positive), and do
+  not treat a branch push as if it only fired on releases.
+- `paths`/`paths-ignore` narrow which file changes fire the workflow; they gate
+  reachability but are **not** a security boundary (a PR touching those paths
+  still fires).
+- `pull_request` vs `pull_request_target` is a distinct event key, never a
+  qualifier — the parser preserves both. See the trust distinction above; this is
+  the single most load-bearing trigger fact.
 
 The classic critical pattern (correlate into ONE finding):
 
@@ -153,6 +172,19 @@ For every `uses:` distinguish `kind`: `local`, `external`, `reusable-workflow`,
   without any change in this repository. For third-party actions this is a real
   supply-chain risk, higher when the workflow is privileged (release, deploy,
   secrets, `id-token`). Recommend pinning to a full 40-hex commit SHA.
+- **Not all mutable refs are equally risky — read `ref_kind` and
+  `looks_like_version`.** `ref_kind: sha` is the hardened state (immutable commit
+  or `@sha256:` digest). `ref_kind: movable` covers *both* a version tag (`@v4`,
+  `@1.2.3`) and a branch (`@main`, `@master`), because the `uses:` string alone
+  cannot tell them apart — GitHub resolves either against tags then branches. The
+  `looks_like_version: true` hint separates them: a movable **version tag** is at
+  least a deliberate release the maintainer cut, whereas a movable **branch**
+  (`looks_like_version: false`) can be silently repointed to arbitrary code at any
+  moment. Treat a branch-tracking ref in a privileged workflow as materially worse
+  than a floating version tag, but pin *both* to a SHA for the hardened state.
+  `looks_like_version` is a hint, not proof — a branch literally named `v2` would
+  read as version-shaped; when the distinction is load-bearing, confirm with
+  `git ls-remote` whether the ref is a tag or a branch.
 - First-party `actions/*` pinned to a tag is lower risk than an unknown
   third party, but SHA pinning is still the hardened state.
 - **Never invent a SHA.** Resolve the SHA the intended version currently points
