@@ -32,6 +32,10 @@
           <code class="command-inline">/attestarc</code> — it discovers how your repository is
           built and delivered, finds the security issues that actually matter, and guides you
           through fixing them.</p>
+        <p class="muted"><strong>Public Preview</strong> — this preview release (<code>0.3.x</code>)
+          is focused on <strong>GitHub</strong> and <strong>GitHub Actions</strong>. It's an expert
+          assistant, not a comprehensive or stable release: your judgment stays in the loop, and
+          every finding cites its evidence.</p>
 
         <div class="cta-row">
           <a class="btn btn-primary" href="#install">
@@ -86,34 +90,42 @@
     <section id="install" aria-labelledby="install-h">
       <div class="container">
         <h2 id="install-h" class="reveal">Install</h2>
-        <p class="muted reveal"><strong>Prerequisites:</strong> Python 3.8+ (standard library only) and git.
+        <p class="muted reveal"><strong>Prerequisites:</strong> Python 3.9+ (standard library only) and git.
           The GitHub CLI (<code>gh</code>) is optional but recommended for read-only remote checks.</p>
 
         <h3 class="reveal">Claude Code <span class="muted">(recommended)</span></h3>
         <p class="muted reveal">Claude Code natively discovers skills under <code>.claude/skills/</code>.
-          The simplest install is a clone:</p>
+          The simplest install is a clone of a signed release tag (releases are published as
+          signed, protected git tags):</p>
         <pre class="reveal"><code><span class="comment"># Global — available in every repository you open</span>
-git clone https://github.com/avishayil/attestarc-skill.git ~/.claude/skills/attestarc
+git clone --branch v0.3.0 --depth 1 \
+  https://github.com/avishayil/attestarc-skill.git ~/.claude/skills/attestarc
 
 <span class="comment"># Or per-project</span>
-git clone https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc</code></pre>
+git clone --branch v0.3.0 --depth 1 \
+  https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc</code></pre>
         <p class="muted reveal">Prefer to copy only the skill payload? Clone the repo and run
           <code>python install.py</code> (<code>--scope user</code> for a global install). Then run
           <code class="command-inline">/attestarc</code> in Claude Code.</p>
 
         <h3 class="reveal">Cursor</h3>
-        <p class="muted reveal">Cursor has no native Skills system and does not auto-discover
-          <code>.claude/skills/</code> — it uses project rules (<code>.cursor/rules/*.mdc</code>)
-          and <code>AGENTS.md</code>. Clone the skill and point a rule at it:</p>
-        <pre class="reveal"><code><span class="comment"># 1. Clone the skill into your project</span>
-git clone https://github.com/avishayil/attestarc-skill.git .cursor/attestarc
+        <p class="muted reveal">Cursor natively supports Agent Skills. It auto-discovers
+          <code>.cursor/skills/</code> (and <code>.agents/skills/</code>) and, for compatibility,
+          also loads <code>.claude/skills/</code> and <code>.codex/skills/</code> — so no
+          <code>.cursor/rules/*.mdc</code> rule is needed. Clone a signed release tag into Cursor's
+          native skills directory:</p>
+        <pre class="reveal"><code><span class="comment"># Cursor-native, per-project</span>
+git clone --branch v0.3.0 --depth 1 \
+  https://github.com/avishayil/attestarc-skill.git .cursor/skills/attestarc
 
-<span class="comment"># 2. Create .cursor/rules/attestarc.mdc referencing SKILL.md:</span>
-<span class="comment">#    "Act as the security engineer described in .cursor/attestarc/SKILL.md;</span>
-<span class="comment">#     load files under .cursor/attestarc/references/ on demand."</span></code></pre>
-        <p class="muted reveal">Then ask Cursor's agent to <em>“assess this repository's supply-chain
-          security with AttestArc.”</em> Full rule text is in the
-          <a href="https://github.com/avishayil/attestarc-skill#cursor" target="_blank" rel="noopener">README</a>.</p>
+<span class="comment"># Or reuse a shared Claude skills directory (Cursor reads it too)</span>
+git clone --branch v0.3.0 --depth 1 \
+  https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc</code></pre>
+        <p class="muted reveal">Then invoke <code class="command-inline">/attestarc</code> from Cursor's
+          Agent chat (skills appear in the <code>/</code> slash search), or just ask Cursor to
+          <em>“assess this repository's supply-chain security with AttestArc.”</em>
+          <code>python install.py --platform cursor</code> installs into <code>.cursor/skills/attestarc</code>
+          for you.</p>
       </div>
     </section>
 

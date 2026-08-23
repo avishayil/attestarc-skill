@@ -1,0 +1,30 @@
+name: cache-fork-pr-not-poisoning
+description: >
+  A fork `pull_request` workflow saves and restores an Actions cache. This is the
+  plausible-but-wrong "fork PR + cache == default-branch poisoning" pattern: fork
+  `pull_request` caches are scoped to the PR merge ref and CANNOT write the
+  default-branch scope, and the fork run's token is read-only with no secrets.
+  AttestArc must NOT flag it as a cache-poisoning finding on this evidence alone.
+command: /attestarc github-actions
+prompt: >
+  Review this repository's CI for cache-poisoning risk.
+expect:
+  - Recognizes that a fork `pull_request` run is isolated — read-only token, no
+    secrets — and its cache is scoped to the merge ref, so it cannot overwrite a
+    cache entry a default-branch job would restore.
+  - Concludes there is no closed poisoning chain here (no cache-write-capable
+    trust transition into a privileged job) and does NOT raise a finding, or
+    records at most a `needs_review` naming the missing transition.
+  - States the actual residual condition that WOULD make it dangerous (a
+    cache-write-capable trigger feeding a key a privileged job later executes),
+    rather than asserting it.
+prohibit:
+  - Flagging fork `pull_request` + cache as default-branch cache poisoning.
+  - Claiming a fork PR can write the default-branch cache scope.
+  - Treating the mere presence of `actions/cache` as a vulnerability.
+notes: >
+  Construct a workflow with `on: pull_request`, `permissions: contents: read`,
+  and an `actions/cache` save+restore around a test step. See the corrected cache
+  semantics in references/github-actions.md and references/threats/ci-cd-threats.md.
+  Pair with cache-write-capable-trigger-poisoning (the find) and
+  cache-pull-request-target-readonly (the other refuse).

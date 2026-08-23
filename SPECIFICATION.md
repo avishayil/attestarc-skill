@@ -1,6 +1,6 @@
 # AttestArc Specification
 
-- **Status:** Draft — normative for V1 (0.2.x)
+- **Status:** Draft — normative for V1 (0.3.x)
 - **Artifact version tracked:** `SKILL.md` frontmatter `metadata.version`
 - **Audience:** Contributors to `attestarc-skill`. This document is the
   authoritative reference for behavior and architecture. It MUST be kept in
@@ -160,12 +160,12 @@ Skill version and is the value the installer reports; there is no separate
 ### 4.2 Installation destinations
 
 The default destination is `.claude/skills/attestarc/`, where **Claude Code**
-natively discovers Agent Skills. **Cursor** has no native Skills system and does
-not auto-discover `.claude/skills/`; it uses project rules (`.cursor/rules/*.mdc`)
-and `AGENTS.md`. To use AttestArc in Cursor, the skill is referenced from a rule
-that points at its `SKILL.md` (see README). The `--platform cursor`
-destination (`.cursor/skills/attestarc/`) merely places the payload for such a
-rule to reference; Cursor does not load it automatically.
+natively discovers Agent Skills. **Cursor** also supports Agent Skills natively:
+it auto-discovers `.cursor/skills/`, `.agents/skills/`, and `.claude/skills/`,
+invokes a skill by `/name`, and requires `name` to match the containing folder.
+The `--platform cursor` destination (`.cursor/skills/attestarc/`) is therefore a
+directly loaded native Skill, not a payload a rule must reference; no
+`.cursor/rules/*.mdc` shim is needed.
 
 | Platform | Scope   | Destination                                    |
 |----------|---------|------------------------------------------------|
@@ -181,8 +181,9 @@ rule to reference; Cursor does not load it automatically.
 <dir>` MAY override the project destination and SHALL be ignored (with a warning)
 for `--scope user`. `--dry-run` SHALL report intended actions without modifying
 the filesystem. `install.py` SHALL additionally accept `--force`. After a
-`cursor` install the installer SHOULD note that Cursor does not auto-load the
-destination and that a `.cursor/rules/*.mdc` referencing the skill is required.
+`cursor` install the installer SHOULD note that Cursor discovers the destination
+natively and that the skill is invoked with `/attestarc` (no referencing rule
+required).
 
 The installer SHALL: (1) validate the source Skill (SKILL.md present at the repo
 root with frontmatter `name: attestarc`); (2) resolve the destination(s); (3)
@@ -219,14 +220,21 @@ conversationally; the state file maintains continuity.
 
 The canonical schema is `assets/findings.schema.json`
 (JSON Schema draft-07). The top-level object SHALL contain `schema_version`
-(integer, currently `1`), `repository` (`root`, and OPTIONAL `scm`/`remote`),
-`created_at`, `updated_at`, and `findings` (array).
+(integer, currently `2`), `repository` (`root`, and OPTIONAL `scm`/`remote`),
+`created_at`, `updated_at`, and `findings` (array). Stable objects (the
+top-level object, each `finding`, `threat`, `evidence` item, `remediation`,
+`verification`, `location`, and `repository`) SHALL set
+`additionalProperties: false`; forward-compatible extension data goes in an
+explicit `extensions` object (`additionalProperties: true`) present on each such
+object, so unknown top-level keys are rejected rather than silently persisted.
 
 A finding SHALL contain at minimum: `id`, `fingerprint`, `domain`, `category`,
 `title`, `severity`, `confidence`, `status`, `first_seen`, `last_seen`, and
-`evidence`. It MAY contain `impact`, `remediation`, `verification`, and, when
-`status` is `accepted_risk`, `accepted_by`/`reason`/`accepted_at`. Helpers
-SHOULD preserve unknown fields.
+`evidence`. It MAY contain `impact`, `remediation`, `verification`, `resource`,
+`subject`, `condition`, and the provenance fields `observed_at`,
+`source_revision`, `last_verified_at`, `assessment_version`; and, when `status`
+is `accepted_risk`, `accepted_by`/`reason`/`accepted_at`. Helpers SHOULD preserve
+human-decided fields on upsert and route any unknown data into `extensions`.
 
 A finding MAY additionally carry the reasoning-grammar output (§8.1):
 
@@ -234,17 +242,19 @@ A finding MAY additionally carry the reasoning-grammar output (§8.1):
   `actor`, `entrypoint`, `controlled_input`, `trust_transition`, `capabilities`
   (array of capability strings, §8.1), `target`, `reachability`
   (`direct` | `conditional` | `trusted-only` | `unknown`), `preconditions`
-  (array), and `evidence_gaps` (array). It is `additionalProperties: true`; the
-  capability and reachability vocabularies are documented in
-  `references/methodology.md`, not enforced as closed enums. No string anywhere
-  under `threat` MAY contain a secret value (§13.2).
+  (array), and `evidence_gaps` (array). Unknown data belongs in its `extensions`
+  object; the capability and reachability vocabularies are the canonical
+  vocabulary in `references/capabilities.md` (referenced from
+  `references/methodology.md`), applied as a SHOULD rather than a closed enum. No
+  string anywhere under `threat` MAY contain a secret value (§13.2).
 - `trust_boundary` (string) — the crossed boundary, e.g.
   `untrusted-contributor -> privileged-ci`.
 - `related_findings` (array of finding-id strings) — components of one
   correlated attack path (§8.5).
 
-Each evidence item SHALL declare a `type` (e.g. `repository-file`, `git-diff`,
-`remote-config`, `tool-output`, `inference`) and MAY carry `source`, `location`,
+Each evidence item SHALL declare a `type` drawn from the closed enum
+`repository-file`, `git-diff`, `remote-config`, `tool-output`, `inference`, and
+MAY carry `source`, `location`,
 and either `observed` or a small structured fact as `key`/`value`. Evidence
 SHOULD prefer small sanitized facts (`{type, source, key, value}`) over pasted
 raw command output, which can carry credentials, personal data, injected
@@ -257,15 +267,25 @@ Finding identity SHALL be a stable fingerprint, not an incrementing counter, so
 a finding survives across runs:
 
 ```
-fingerprint = sha256("<domain>|<category>|<resource>|<normalized-condition>")
+fingerprint = sha256("<domain>|<category>|<canonical-resource>|<canonical-subject>")
 ```
 
-The display id SHALL be `AA-<PREFIX>-<HEX6>` where `HEX6` is the uppercased first
-six hex characters of the fingerprint and `PREFIX` is derived from the domain
+where each part is canonicalized (lowercased, trimmed, path separators
+normalized). The fingerprint deliberately EXCLUDES the free-text `condition`, so
+re-wording a finding's human-readable description does not change its identity;
+`subject` is an OPTIONAL stable machine key (e.g. an action ref or job name) that
+distinguishes findings sharing a `resource`.
+
+The display id SHALL be `AA-<PREFIX>-<HEX8>` where `HEX8` is the uppercased first
+eight hex characters of the fingerprint and `PREFIX` is derived from the domain
 (`repository`→`REP`, `dependencies`→`DEP`, `identity-secrets`→`IDS`,
 `supply-chain`→`SC`, `changes`→`CHG`, `ci`→`CI`), with the special case that a
 `ci` finding relating to GitHub Actions uses `GHA`. The id pattern is
-`^AA-[A-Z]{2,4}-[0-9A-F]{6}$`.
+`^AA-[A-Z]{2,4}-[0-9A-F]{8}$`.
+
+Widening the id to eight hex characters and dropping `condition` from the
+fingerprint changed persisted identifiers, hence the `schema_version` bump from
+`1` to `2`.
 
 ### 6.4 Finding states
 
@@ -334,10 +354,11 @@ can achieve) rather than YAML keys — e.g. `id-token: write →
 REQUEST_WORKLOAD_IDENTITY`, `packages: write → PUBLISH_ARTIFACT`. It SHALL place
 each candidate on the reachability ladder `present → reachable → exploitable →
 impactful` and tag the reaching actor as `direct`, `conditional`,
-`trusted-only`, or `unknown`. The capability and reachability vocabularies are
-defined in `references/methodology.md`; they are documented guidance and
-free-form passthrough fields, not closed schema enums. The chain SHOULD be
-recorded on the finding's `threat` object and `trust_boundary` (§6.2).
+`trusted-only`, or `unknown`. The canonical capability vocabulary is defined in
+`references/capabilities.md` and the reachability vocabulary in
+`references/methodology.md`; they are documented guidance applied as a SHOULD,
+not closed schema enums. The chain SHOULD be recorded on the finding's `threat`
+object and `trust_boundary` (§6.2).
 
 An `evidence_gaps` entry SHALL explain *why the missing evidence matters* and
 *what evidence would resolve it*, not merely note that something was unchecked.
@@ -395,7 +416,7 @@ It SHOULD show at most approximately five primary findings initially, each in th
 form:
 
 ```
-AA-GHA-81F21C — HIGH
+AA-GHA-81F21C7A — HIGH
 <title>
 ```
 
@@ -482,24 +503,46 @@ emit normalized facts per workflow: `triggers`, workflow- and job-level
 (reusable workflow) with `uses_pinned` (whether a job-level reusable-workflow ref
 is a 40-hex SHA), `secrets` (a reusable-workflow call's `secrets:`, normalized to
 `"inherit"` | `{name: source}` | `null`), `uses_cache` (a presence fact: the job
-reads/writes an Actions cache), `actions[]` (`name`, `ref`, `pinned`, `kind`),
-`run_steps[]` (`expressions`, `references_untrusted_input`, `fetch_execute`, and
-`fetch_execute_excerpt` — the sanitized matched command line when a
-fetch-then-execute one-liner such as `curl … | sh` is present), and
+reads/writes an Actions cache), `actions[]` (`name`, `ref`, `pinned`, `kind`,
+where `kind` distinguishes `local` | `external` | `reusable-workflow` | `docker`
+and `pinned` is true only for an immutable reference — a 40-hex commit SHA for a
+Git-based action or `@sha256:<digest>` for a `docker://` image; a tag or implicit
+`latest` is reported unpinned, and a registry port such as `host:5000/img` is not
+mistaken for a tag), `run_steps[]` (one record per step that runs a command (`has_run: true`),
+references attacker-influenced input, or fetches-and-executes — carrying
+`has_run`, a sanitized whitespace-collapsed `run_excerpt` of the `run:` block
+(source, not runtime data; truncated), `expressions`, `references_untrusted_input`,
+`fetch_execute`, and `fetch_execute_excerpt` — the matched command line when a
+fetch-then-execute one-liner such as `curl … | sh` **or** a network fetch piped
+into a language interpreter such as `curl … | python3 -`/`| node`/`| ruby` is
+present; a benign `uses:` step whose only expressions are trusted, e.g.
+`${{ matrix.* }}`, stays in `actions[]` and is not reported as a run step), and
 `checkout_refs[]` (`references_untrusted_ref`). These are facts only: whether a
 `fetch_execute`, an inherited secret, a mutable reusable ref, or a restored cache
 matters is the Host's judgment, informed by the job's trigger and privilege. It
 SHALL set `parse_partial: true` rather than raising on ambiguous input. It SHALL
-NOT emit a security verdict.
+NOT emit a security verdict. When a file carries `parse_partial: true` the Host
+MUST NOT draw a high-confidence *negative* (safe) conclusion from the parsed
+facts alone: it SHALL read the raw file and record the residual uncertainty as an
+`evidence_gap`. A partial parse constrains only negative conclusions; a positive
+observation backed by parsed evidence remains valid.
 
 ### 12.4 `inspect_git_diff.py`
 
 SHALL compute security-relevant change facts from read-only `git diff`
 (default: working tree vs HEAD; options for staged and revision ranges): changed
-files, and per changed workflow the before/after snapshots plus a
-`security_delta` (permissions gained, new privileged triggers, new self-hosted
-runner, new/newly-mutable action references, new untrusted checkout refs). Facts,
-not findings.
+files, and per changed workflow (restricted to the executing **root**
+`.github/workflows/`, matching `inspect_workflows`) the before/after snapshots
+plus a `security_delta`. The delta SHALL surface capability gains at both the
+workflow and job level: permissions gained (workflow- and job-scoped), new
+privileged or otherwise new triggers, new self-hosted runners and runner-label
+changes, new/newly-mutable action references (external **and** Docker tags), new
+reusable-workflow `uses:` (flagging newly-mutable calls), newly passed
+`secrets: inherit`/secret sets, new deployment `environment:`, new cache use, new
+download-and-execute steps, new artifact publish/consume, and new untrusted
+checkout refs. Facts, not findings. When either snapshot parsed only partially it
+SHALL propagate `parse_partial` so an empty delta on an unparsed workflow is not
+read as "safe" (§12.3).
 
 ## 13. Security requirements
 
@@ -608,6 +651,11 @@ run interactively against the Host (see §16).
 
 ## 15. Platform scope
 
+The `0.3.x` line is a **Public Preview — GitHub & GitHub Actions**: deep support
+is scoped to GitHub SCM and GitHub Actions, and other platforms receive only the
+generic methodology at lower confidence. The preview label is a deliberate signal
+that coverage is intentionally narrow, not that the reasoning is provisional.
+
 - **Fully supported:** GitHub (SCM), GitHub Actions (CI).
 - **Generic awareness:** Docker, common dependency ecosystems, release and
   supply-chain configuration.
@@ -649,7 +697,8 @@ application**; Claude Code and Cursor provide the agent runtime.
 ## 18. Conformance (definition of done)
 
 A conforming V1 SHALL satisfy: installs as a native Agent Skill in Claude Code
-and is usable in Cursor via a referencing rule; `/attestarc`
+and in Cursor (which discovers `.cursor/skills/`, `.agents/skills/`, and
+`.claude/skills/` natively — no referencing rule required); `/attestarc`
 is discoverable and auto-invokes for clearly relevant security requests;
 discovery precedes findings; GitHub Actions workflows parse reliably; findings
 persist across sessions; duplicates are avoided; every finding carries evidence;

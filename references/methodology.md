@@ -77,13 +77,16 @@ Impact is measured against what an attacker reaches:
 ## Capabilities
 
 Translate configuration into what an attacker can *achieve*, not which YAML key
-exists. Use this vocabulary (extend it when a case needs to):
+exists. Use this vocabulary (`references/capabilities.md` is the canonical
+catalog — definitions, what grants each, and how they chain; extend it when a
+case genuinely needs a capability not listed):
 
 ```
-EXECUTE_UNTRUSTED_CODE      MODIFY_SOURCE           APPROVE_CHANGE
-WRITE_REPOSITORY            READ_SECRET             REQUEST_WORKLOAD_IDENTITY
-ASSUME_EXTERNAL_IDENTITY    PUBLISH_ARTIFACT        MUTATE_RELEASE
-DEPLOY_TO_ENVIRONMENT       MODIFY_PIPELINE         BYPASS_REVIEW
+EXECUTE_UNTRUSTED_CODE      MODIFY_PIPELINE         MODIFY_SOURCE
+WRITE_REPOSITORY            BYPASS_REVIEW           APPROVE_CHANGE
+READ_SECRET                 REQUEST_WORKLOAD_IDENTITY   ASSUME_EXTERNAL_IDENTITY
+READ_ARTIFACT               PUBLISH_ARTIFACT        MUTATE_ARTIFACT
+MUTATE_RELEASE              DEPLOY_TO_ENVIRONMENT   MODIFY_DEPLOYMENT_POLICY
 ```
 
 Examples: `id-token: write` → `REQUEST_WORKLOAD_IDENTITY` (then ask *what trusts

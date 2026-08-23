@@ -29,7 +29,7 @@ Core conventions:
 
 ## Development setup
 
-You need **Python 3.8+** (standard library only) and **git**. The test suite
+You need **Python 3.9+** (standard library only) and **git**. The test suite
 uses `pytest`:
 
 ```bash

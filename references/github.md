@@ -20,17 +20,22 @@ gh api repos/{owner}/{repo}/branches                          # enumerate branch
 gh api repos/{owner}/{repo}/tags                              # enumerate tags (find v*, release tags)
 gh api repos/{owner}/{repo}/rulesets                          # rulesets (and their ref/tag targets)
 gh api repos/{owner}/{repo}/branches/{branch}/protection      # branch protection
-gh api repos/{owner}/{repo}/actions/permissions               # Actions policy
-gh api repos/{owner}/{repo}/actions/permissions/workflow      # default token perms + fork-PR settings
+gh api repos/{owner}/{repo}/actions/permissions               # Actions policy (enabled, allowed_actions)
+gh api repos/{owner}/{repo}/actions/permissions/workflow      # default GITHUB_TOKEN perms; can workflows approve PRs
+gh api repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval        # approval gate before fork PRs run
+gh api repos/{owner}/{repo}/actions/permissions/fork-pr-workflows-private-repos     # fork-PR token/secret exposure (private repos)
 gh api repos/{owner}/{repo}/environments                      # environments
 ```
 
-The `actions/permissions/workflow` endpoint also reveals **effective fork-PR
-settings** — whether fork PRs receive write tokens or secrets — which decides
-whether a plain `pull_request` is really read-only (see
-`references/github-actions.md`). If that setting cannot be read, treat it as an
-`evidence_gap` and record the affected CI transition `needs_review` rather than
-assuming the platform default.
+The `actions/permissions/workflow` endpoint reports only the default
+`GITHUB_TOKEN` permission (read vs write) and whether Actions may create/approve
+PRs — **not** whether fork PRs receive write tokens or secrets. That effective
+fork-PR exposure comes from the dedicated `fork-pr-*` endpoints above (the
+contributor-approval gate, and for private repositories the token/secret
+exposure setting), and it decides whether a plain `pull_request` is really
+read-only (see `references/github-actions.md`). If the relevant setting cannot be
+read, treat it as an `evidence_gap` and record the affected CI transition
+`needs_review` rather than assuming the platform default.
 
 If none is available, state that remote settings could not be verified and
 assess only what is observable locally. Absence of access is not a finding.

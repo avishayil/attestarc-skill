@@ -1,0 +1,30 @@
+name: cache-write-capable-trigger-poisoning
+description: >
+  The genuine cache-poisoning chain. A cache-write-capable trigger — a push to a
+  branch whose scope the default branch can read, a scheduled run, or a
+  `workflow_dispatch` — runs a job that writes an Actions cache key from
+  attacker-influenceable content, and a later PRIVILEGED job (contents/packages
+  write, deploy, or signing) restores that same key and EXECUTES from it. Here
+  the write→execute trust transition closes, so this IS a finding.
+command: /attestarc github-actions
+prompt: >
+  Review this repository's build/release workflows for cache-poisoning risk.
+expect:
+  - Identifies the cache WRITE performed under a write-capable trigger and the
+    later RESTORE-and-execute in a privileged job sharing the cache key scope.
+  - Closes the chain — attacker-influenced content → poisoned cache key →
+    privileged execution / publish — as MODIFY_PIPELINE / EXECUTE_UNTRUSTED_CODE
+    reaching a release or deployment asset.
+  - Rates it by the privileged job's blast radius (what the restored content can
+    do with the write token / signing identity), not by cache presence alone.
+  - Recommends scoping cache keys by trust level, validating restored content, or
+    not sharing a cache between untrusted-writer and privileged-reader jobs.
+prohibit:
+  - Dismissing it because "fork PRs can't poison the cache" — the writer here is a
+    write-capable trigger, not a fork PR.
+  - Reporting the cache use as a bare fact without closing the write→execute chain.
+notes: >
+  Contrast with cache-fork-pr-not-poisoning: the difference that flips refuse→find
+  is WHO can write the key scope the privileged job restores. Construct two jobs
+  (or workflows) sharing a cache key: one writing under push/schedule/dispatch,
+  one privileged restoring+executing it. See references/threats/ci-cd-threats.md.

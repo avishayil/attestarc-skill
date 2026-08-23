@@ -1,20 +1,21 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://attestarc.dev/schemas/findings-1.json",
+  "$id": "https://attestarc.dev/schemas/findings-2.json",
   "title": "AttestArc findings state",
-  "description": "Structured persistent memory for AttestArc, stored at .attestarc/findings.json. Secret values MUST NOT appear anywhere in this document.",
+  "description": "Structured persistent memory for AttestArc, stored at .attestarc/findings.json. Secret values MUST NOT appear anywhere in this document. Stable objects are closed (additionalProperties:false); host- or tool-specific data goes in the open 'extensions' object.",
   "type": "object",
   "required": ["schema_version", "repository", "created_at", "updated_at", "findings"],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "schema_version": {
       "type": "integer",
-      "const": 1
+      "const": 2,
+      "description": "Bumped to 2: 8-hex finding ids; fingerprint hashes a canonical subject, not the free-text condition."
     },
     "repository": {
       "type": "object",
       "required": ["root"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "root": { "type": "string" },
         "scm": {
@@ -23,8 +24,12 @@
         },
         "remote": {
           "type": ["string", "null"],
-          "description": "e.g. owner/repository, or null when unknown"
-        }
+          "description": "Credential-redacted remote (owner/repo or URL without userinfo), or null when unknown"
+        },
+        "remote_host": { "type": ["string", "null"] },
+        "current_branch": { "type": ["string", "null"] },
+        "default_branch": { "type": ["string", "null"] },
+        "extensions": { "$ref": "#/definitions/extensions" }
       }
     },
     "created_at": { "type": "string", "format": "date-time" },
@@ -32,9 +37,15 @@
     "findings": {
       "type": "array",
       "items": { "$ref": "#/definitions/finding" }
-    }
+    },
+    "extensions": { "$ref": "#/definitions/extensions" }
   },
   "definitions": {
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Open namespace for host- or tool-specific data that is not part of the stable contract. Secret values MUST NOT appear here."
+    },
     "finding": {
       "type": "object",
       "required": [
@@ -50,17 +61,17 @@
         "last_seen",
         "evidence"
       ],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^AA-[A-Z]{2,4}-[0-9A-F]{6}$",
-          "description": "Display identifier derived from the fingerprint, e.g. AA-GHA-81F21C"
+          "pattern": "^AA-[A-Z]{2,4}-[0-9A-F]{8}$",
+          "description": "Display identifier derived from the fingerprint, e.g. AA-GHA-81F21C7A"
         },
         "fingerprint": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$",
-          "description": "sha256 of domain|category|resource|normalized-condition"
+          "description": "sha256 of domain|category|canonical(resource)|canonical(subject). The free-text condition is NOT part of the fingerprint."
         },
         "domain": {
           "type": "string",
@@ -76,6 +87,18 @@
         "category": {
           "type": "string",
           "description": "Stable check/category slug, e.g. dependency-integrity, mutable-action, excessive-permissions"
+        },
+        "resource": {
+          "type": "string",
+          "description": "The resource the finding is about, e.g. a workflow path. Feeds the fingerprint."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Optional stable machine key disambiguating findings on the same resource (e.g. an action ref or job name). Feeds the fingerprint."
+        },
+        "condition": {
+          "type": "string",
+          "description": "Human-readable description of the risky condition. Does NOT feed the fingerprint, so re-wording keeps the same id."
         },
         "title": { "type": "string", "minLength": 1 },
         "severity": {
@@ -99,6 +122,24 @@
         },
         "first_seen": { "type": "string", "format": "date-time" },
         "last_seen": { "type": "string", "format": "date-time" },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the underlying condition was last observed. Optional."
+        },
+        "source_revision": {
+          "type": "string",
+          "description": "Commit/ref at which the finding was observed. Optional."
+        },
+        "last_verified_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the condition was last re-observed for verification. Optional."
+        },
+        "assessment_version": {
+          "type": "string",
+          "description": "AttestArc version that produced/last-touched this finding. Optional."
+        },
         "evidence": {
           "type": "array",
           "items": { "$ref": "#/definitions/evidence" }
@@ -113,7 +154,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^AA-[A-Z]{2,4}-[0-9A-F]{6}$"
+            "pattern": "^AA-[A-Z]{2,4}-[0-9A-F]{8}$"
           },
           "description": "Ids of findings that form part of the same attack path. Optional."
         },
@@ -121,13 +162,14 @@
         "verification": { "$ref": "#/definitions/verification" },
         "accepted_by": { "type": "string" },
         "reason": { "type": "string" },
-        "accepted_at": { "type": "string", "format": "date-time" }
+        "accepted_at": { "type": "string", "format": "date-time" },
+        "extensions": { "$ref": "#/definitions/extensions" }
       }
     },
     "threat": {
       "type": "object",
-      "additionalProperties": true,
-      "description": "Optional attack-path reasoning: how an actor reaches a capability that affects an asset. Free-form to keep the reasoning grammar flexible; see references/methodology.md for the vocabulary. MUST NOT contain secret values.",
+      "additionalProperties": false,
+      "description": "Optional attack-path reasoning: how an actor reaches a capability that affects an asset. See references/methodology.md and references/capabilities.md for the vocabulary. MUST NOT contain secret values.",
       "properties": {
         "actor": {
           "type": "string",
@@ -148,7 +190,7 @@
         "capabilities": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Capabilities gained, from the methodology vocabulary, e.g. EXECUTE_UNTRUSTED_CODE, REQUEST_WORKLOAD_IDENTITY, PUBLISH_ARTIFACT"
+          "description": "Capabilities gained, from references/capabilities.md, e.g. EXECUTE_UNTRUSTED_CODE, REQUEST_WORKLOAD_IDENTITY, PUBLISH_ARTIFACT"
         },
         "target": {
           "type": "string",
@@ -168,25 +210,34 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Unverified transitions and the evidence that would resolve them; expected on needs_review findings"
-        }
+        },
+        "extensions": { "$ref": "#/definitions/extensions" }
       }
     },
     "evidence": {
       "type": "object",
       "required": ["type"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "type": {
           "type": "string",
-          "description": "e.g. repository-file, git-diff, remote-config, tool-output, inference"
+          "enum": [
+            "repository-file",
+            "git-diff",
+            "remote-config",
+            "tool-output",
+            "inference"
+          ],
+          "description": "The kind of observation. 'inference' marks a reasoned (not directly observed) fact and should pair with evidence_gaps."
         },
         "source": { "type": "string" },
         "location": {
           "type": "object",
-          "additionalProperties": true,
+          "additionalProperties": false,
           "properties": {
             "line": { "type": "integer" },
-            "column": { "type": "integer" }
+            "column": { "type": "integer" },
+            "end_line": { "type": "integer" }
           }
         },
         "key": {
@@ -200,12 +251,13 @@
         "observed": {
           "type": "string",
           "description": "The observed value or condition when a single structured key/value does not fit. Prefer small sanitized facts over raw command output (raw logs can carry credentials, PII, injected instructions, or terminal escape sequences). MUST NOT contain secret values."
-        }
+        },
+        "extensions": { "$ref": "#/definitions/extensions" }
       }
     },
     "remediation": {
       "type": "object",
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "summary": { "type": "string" },
         "type": {
@@ -216,12 +268,13 @@
         "targets": {
           "type": "array",
           "items": { "type": "string" }
-        }
+        },
+        "extensions": { "$ref": "#/definitions/extensions" }
       }
     },
     "verification": {
       "type": "object",
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "method": { "type": "string" },
         "expected": { "type": "string" },
@@ -230,7 +283,8 @@
           "enum": ["pending", "verified", "failed", "not-applicable"]
         },
         "checked_at": { "type": "string", "format": "date-time" },
-        "observed": { "type": "string" }
+        "observed": { "type": "string" },
+        "extensions": { "$ref": "#/definitions/extensions" }
       }
     }
   }
