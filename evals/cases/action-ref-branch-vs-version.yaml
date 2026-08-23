@@ -1,0 +1,33 @@
+name: action-ref-branch-vs-version
+description: >
+  A deploy workflow references three Actions differently: a pinned commit SHA, a
+  movable version tag (some-vendor/setup-tool@v3), and a branch-tracking ref
+  (internal-tools/deployer@main). The agent must distinguish the branch ref as
+  materially riskier than the version tag, not collapse both into "unpinned".
+fixture: tests/fixtures/mutable-action-refs
+command: /attestarc github-actions
+prompt: >
+  Review how the third-party Actions in the deploy workflow are referenced.
+expect:
+  - Identifies actions/checkout as immutably pinned (a full commit SHA) and
+    treats it as the hardened baseline.
+  - Distinguishes internal-tools/deployer@main (a branch-tracking, movable ref,
+    looks_like_version false) from some-vendor/setup-tool@v3 (a movable version
+    tag): the branch ref can be silently repointed to arbitrary code at any time
+    with no change in this repository, so it is the riskier of the two.
+  - Closes the chain for @main: a maintainer of that Action (or anyone who can
+    push to its branch) → code executes in a job holding contents:write and
+    id-token: write, deploying to production → MODIFY_PIPELINE / PUBLISH_ARTIFACT.
+  - Recommends pinning both movable refs to reviewed commit SHAs, prioritizing
+    the branch-tracking one.
+prohibit:
+  - Claiming certainty that @main is a branch and @v3 is a tag as though decided
+    from the uses: string alone (it is a well-supported hint, not proof; GitHub
+    resolves either against tags then branches).
+  - Rating this critical as a fork-reachable issue — it runs on push to the
+    protected default branch, not from an arbitrary pull request.
+  - Treating the SHA-pinned actions/checkout as a mutable-reference finding.
+notes: >
+  Exercises the v0.3.1 ref_kind / looks_like_version facts. The point is
+  discernment among movable refs, not a blanket "unpinned" verdict. Severity
+  still follows reachability (trusted trigger, third-party-compromise dependency).

@@ -3,6 +3,38 @@
 All notable changes to AttestArc are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-08-23
+
+**Public Preview — GitHub & GitHub Actions.** A fact-fidelity fast-follow to
+`0.3.0`, driven by the real-repository feedback pass: the workflow inspector now
+distinguishes *how* an action reference is movable and *where* a trigger fires,
+so the Host can reason about reachability without re-reading the raw YAML. Facts
+only; no verdicts, and still stdlib-only at runtime.
+
+### Added
+
+- **Action-ref kind classification (`inspect_workflows.py`).** Each `actions[]`
+  entry now carries `ref_kind` (`sha` | `movable` | `none`) and a
+  `looks_like_version` hint alongside the existing `pinned` bool. This separates a
+  movable **version tag** (`@v4`, `@1.2.3`) from a movable **branch** (`@main`) —
+  materially riskier because a branch can be repointed to arbitrary code at any
+  time — without claiming tag-vs-branch certainty, which is undecidable from the
+  `uses:` string alone (GitHub resolves either). `inspect_git_diff.py` surfaces the
+  riskier subset as `new_branch_like_mutable_references`. `references/github-actions.md`
+  gains reasoning guidance on branch-vs-version movability.
+- **Trigger qualifier fidelity (`inspect_workflows.py`).** A structured
+  `trigger_details` fact maps each `on:` event to its scoping qualifiers
+  (`branches`/`tags`/`paths`/`types`, and `schedule.cron`), preserving the
+  load-bearing `pull_request` vs `pull_request_target` distinction. The flat
+  `triggers` list is retained for back-compat. This lets the Host tell a tags-only
+  release `push` from a branch push; the privilege judgment stays with the Host and
+  the references.
+
+### Notes
+
+- Additive to the `findings.json` schema — no id or fingerprint change from
+  `0.3.0`; existing local state remains compatible.
+
 ## [0.3.0] — 2026-08-23
 
 **Public Preview — GitHub & GitHub Actions.** Hardens the persistent-state and

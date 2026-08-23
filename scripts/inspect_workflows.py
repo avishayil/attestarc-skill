@@ -33,6 +33,12 @@ import sys
 # --------------------------------------------------------------------------- #
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _EXPR = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
+# A ref that *looks like* a released version: v4, v1.2, v1.2.3, 1.2.3, and an
+# optional pre-release/build suffix (v1.2.3-rc.1). This is only a hint used to
+# tell a movable *version tag* apart from a movable *branch* (main/master); it
+# is NOT a claim of tag-vs-branch certainty, which is undecidable from the
+# ``uses:`` string alone (GitHub resolves either against tags then branches).
+_VERSION_REF = re.compile(r"^v?\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.]+)?$")
 
 # Context references that are attacker-influenced in fork/PR/issue events.
 _UNTRUSTED_NEEDLES = (
@@ -360,6 +366,52 @@ def _triggers(on_value):
     return [str(on_value)]
 
 
+# Per-event qualifiers that scope *where* an event fires. These are load-bearing
+# for reachability (e.g. a ``push`` restricted to ``tags: [v*]`` is a release
+# trigger, not a branch push), so they are surfaced as facts alongside the flat
+# ``triggers`` list. The privilege judgment stays with the Host.
+_TRIGGER_QUALIFIERS = (
+    "branches", "branches-ignore", "tags", "tags-ignore",
+    "paths", "paths-ignore", "types",
+)
+
+
+def _event_qualifiers(event, cfg):
+    """Structured qualifiers for one ``on:`` event; ``{}`` when it has none."""
+    if event == "schedule":
+        crons = [str(item["cron"]) for item in _as_list(cfg)
+                 if isinstance(item, dict) and "cron" in item]
+        return {"cron": crons} if crons else {}
+    if not isinstance(cfg, dict):
+        return {}
+    q = {}
+    for key in _TRIGGER_QUALIFIERS:
+        if key in cfg:
+            q[key] = [str(x) for x in _as_list(cfg[key])]
+    return q
+
+
+def _trigger_details(on_value):
+    """Map each trigger event to its qualifiers.
+
+    Back-compat companion to ``_triggers`` (which stays a flat name list). A
+    bare event (string, list item, or ``pull_request:`` with no body) maps to an
+    empty ``{}`` — present, unqualified. The ``pull_request`` vs
+    ``pull_request_target`` distinction is preserved because they are distinct
+    event keys.
+    """
+    if on_value is None:
+        return {}
+    if isinstance(on_value, str):
+        return {on_value: {}}
+    if isinstance(on_value, list):
+        return {str(e): {} for e in on_value}
+    if isinstance(on_value, dict):
+        return {str(event): _event_qualifiers(str(event), cfg)
+                for event, cfg in on_value.items()}
+    return {}
+
+
 def _norm_permissions(value):
     if value is None:
         return None
@@ -428,6 +480,22 @@ def _fetch_execute_facts(run_text):
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
+def _classify_ref(ref):
+    """Return ``(ref_kind, looks_like_version)`` for a Git-based action ref.
+
+    ``ref_kind`` is ``"sha"`` for an immutable 40-hex commit SHA, ``"movable"``
+    for a tag or branch that can be repointed after review, or ``"none"`` when
+    there is no ref. ``looks_like_version`` is a *hint* (True only for movable,
+    version-shaped refs); it never asserts tag-vs-branch, which cannot be decided
+    from the ``uses:`` string alone.
+    """
+    if ref is None:
+        return "none", False
+    if _SHA40.match(ref):
+        return "sha", False
+    return "movable", bool(_VERSION_REF.match(ref))
+
+
 def _classify_docker(uses: str):
     """Classify a ``docker://`` action reference and its pin state.
 
@@ -441,18 +509,24 @@ def _classify_docker(uses: str):
     body = uses[len("docker://"):]
     if "@" in body:
         name, ref = body.split("@", 1)
-        return {"name": f"docker://{name}", "ref": ref,
-                "pinned": bool(_DIGEST.match(ref)), "kind": "docker",
-                "uses": uses}
+        pinned = bool(_DIGEST.match(ref))
+        return {"name": f"docker://{name}", "ref": ref, "pinned": pinned,
+                "ref_kind": "sha" if pinned else "movable",
+                "looks_like_version": (
+                    False if pinned else bool(_VERSION_REF.match(ref))),
+                "kind": "docker", "uses": uses}
     last_slash = body.rfind("/")
     tail = body[last_slash + 1:]
     if ":" in tail:
         tail_name, tag = tail.rsplit(":", 1)
         name = body[:last_slash + 1] + tail_name
         return {"name": f"docker://{name}", "ref": tag, "pinned": False,
+                "ref_kind": "movable",
+                "looks_like_version": bool(_VERSION_REF.match(tag)),
                 "kind": "docker", "uses": uses}
-    # No tag at all -> implicit :latest, which is mutable.
+    # No tag at all -> implicit :latest, which is mutable (but not a version).
     return {"name": f"docker://{body}", "ref": None, "pinned": False,
+            "ref_kind": "movable", "looks_like_version": False,
             "kind": "docker", "uses": uses}
 
 
@@ -460,7 +534,7 @@ def _classify_action(uses: str):
     uses = uses.strip()
     if uses.startswith(("./", "../")):
         return {"name": uses, "ref": None, "pinned": None, "kind": "local",
-                "uses": uses}
+                "ref_kind": "none", "looks_like_version": False, "uses": uses}
     if uses.startswith("docker://"):
         return _classify_docker(uses)
     kind = "external"
@@ -472,7 +546,10 @@ def _classify_action(uses: str):
     pinned = None
     if ref is not None:
         pinned = bool(_SHA40.match(ref))
-    return {"name": name, "ref": ref, "pinned": pinned, "kind": kind, "uses": uses}
+    ref_kind, looks_like_version = _classify_ref(ref)
+    return {"name": name, "ref": ref, "pinned": pinned, "ref_kind": ref_kind,
+            "looks_like_version": looks_like_version, "kind": kind,
+            "uses": uses}
 
 
 def _expressions(text: str):
@@ -596,6 +673,7 @@ def inspect_workflow_text(text: str, path: str) -> dict:
             "parse_partial": True,
             "raw_excerpt": text[:400],
             "triggers": [],
+            "trigger_details": {},
             "permissions": None,
             "jobs": [],
         }
@@ -612,6 +690,7 @@ def inspect_workflow_text(text: str, path: str) -> dict:
         "name": data.get("name"),
         "parse_partial": partial,
         "triggers": _triggers(data.get("on")),
+        "trigger_details": _trigger_details(data.get("on")),
         "permissions": _norm_permissions(data.get("permissions")),
         "jobs": jobs,
     }

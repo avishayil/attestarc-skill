@@ -145,6 +145,125 @@ def test_docker_registry_port_no_tag_is_mutable():
 
 
 # --------------------------------------------------------------------------- #
+# ref_kind / looks_like_version: movable branch vs movable version tag vs SHA
+# --------------------------------------------------------------------------- #
+def test_ref_kind_sha_is_not_version():
+    a = iw._classify_action(
+        "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683")
+    assert a["ref_kind"] == "sha"
+    assert a["looks_like_version"] is False
+
+
+def test_ref_kind_version_tag_is_movable_and_version_like():
+    for ref in ("v4", "v1.2", "v1.2.3", "1.2.3", "v2.0.0-rc.1"):
+        a = iw._classify_action(f"actions/checkout@{ref}")
+        assert a["ref_kind"] == "movable", ref
+        assert a["looks_like_version"] is True, ref
+        assert a["pinned"] is False, ref
+
+
+def test_ref_kind_branch_is_movable_but_not_version_like():
+    for ref in ("main", "master", "develop", "release"):
+        a = iw._classify_action(f"third-party/example@{ref}")
+        assert a["ref_kind"] == "movable", ref
+        assert a["looks_like_version"] is False, ref
+
+
+def test_ref_kind_none_for_local_and_missing_ref():
+    local = iw._classify_action("./.github/actions/foo")
+    assert local["ref_kind"] == "none"
+    assert local["looks_like_version"] is False
+    # An external action with no @ref at all.
+    noref = iw._classify_action("actions/checkout")
+    assert noref["ref_kind"] == "none"
+    assert noref["looks_like_version"] is False
+
+
+def test_ref_kind_docker_tag_digest_and_latest():
+    tag = iw._classify_action("docker://alpine:3.19")
+    assert tag["ref_kind"] == "movable"
+    assert tag["looks_like_version"] is True
+    branchy = iw._classify_action("docker://alpine:edge")
+    assert branchy["ref_kind"] == "movable"
+    assert branchy["looks_like_version"] is False
+    digest = iw._classify_action("docker://alpine@sha256:" + "a" * 64)
+    assert digest["ref_kind"] == "sha"
+    assert digest["looks_like_version"] is False
+    latest = iw._classify_action("docker://alpine")
+    assert latest["ref_kind"] == "movable"
+    assert latest["looks_like_version"] is False
+
+
+# --------------------------------------------------------------------------- #
+# trigger_details: per-event qualifiers, back-compat flat triggers preserved
+# --------------------------------------------------------------------------- #
+def test_trigger_details_push_tags_vs_branches():
+    wf = iw.inspect_workflow_text(
+        "on:\n"
+        "  push:\n"
+        "    tags: ['v*']\n"
+        "    branches: [main]\n"
+        "    paths: ['src/**']\n"
+        "jobs:\n"
+        "  a:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: make\n",
+        "ci.yml",
+    )
+    assert wf["triggers"] == ["push"]  # flat list unchanged
+    details = wf["trigger_details"]
+    assert details["push"]["tags"] == ["v*"]
+    assert details["push"]["branches"] == ["main"]
+    assert details["push"]["paths"] == ["src/**"]
+
+
+def test_trigger_details_preserves_pull_request_target_distinction():
+    wf = iw.inspect_workflow_text(
+        "on:\n"
+        "  pull_request:\n"
+        "    types: [opened, synchronize]\n"
+        "  pull_request_target:\n"
+        "jobs:\n"
+        "  a:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: make\n",
+        "ci.yml",
+    )
+    details = wf["trigger_details"]
+    assert "pull_request" in details
+    assert "pull_request_target" in details
+    assert details["pull_request"]["types"] == ["opened", "synchronize"]
+    # pull_request_target with an empty body is present but unqualified.
+    assert details["pull_request_target"] == {}
+
+
+def test_trigger_details_list_and_string_forms():
+    listed = iw.inspect_workflow_text(
+        "on: [push, pull_request]\njobs: {}\n", "ci.yml")
+    assert listed["trigger_details"] == {"push": {}, "pull_request": {}}
+    single = iw.inspect_workflow_text("on: push\njobs: {}\n", "ci.yml")
+    assert single["trigger_details"] == {"push": {}}
+
+
+def test_trigger_details_schedule_cron_captured():
+    wf = iw.inspect_workflow_text(
+        "on:\n"
+        "  schedule:\n"
+        "    - cron: '0 0 * * *'\n"
+        "jobs: {}\n",
+        "ci.yml",
+    )
+    assert wf["trigger_details"]["schedule"]["cron"] == ["0 0 * * *"]
+
+
+def test_trigger_details_empty_on_unparseable():
+    wf = iw.inspect_workflow_text("%%% not yaml\n:::\n- - -\n", "ci.yml")
+    assert wf["trigger_details"] == {}
+
+
+# --------------------------------------------------------------------------- #
 # fixture-level facts
 # --------------------------------------------------------------------------- #
 def test_secure_repo_is_clean_at_fact_level(fixtures_dir):

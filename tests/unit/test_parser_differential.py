@@ -63,6 +63,19 @@ _CORPUS = [
     "    - uses: actions/checkout@v4\n"
     "    - uses: actions/cache@v4\n"
     "    - run: pytest -q\n",
+    # branch ref vs version tag vs SHA (ref_kind / looks_like_version)
+    "on:\n  push:\n    tags: ['v*']\n    branches: [main]\n"
+    "jobs:\n  a:\n    runs-on: ubuntu-latest\n"
+    "    steps:\n"
+    "      - uses: third-party/branchy@main\n"
+    "      - uses: third-party/tagged@v1.2.3\n"
+    "      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n",
+    # multiple qualified triggers incl. pull_request vs pull_request_target
+    "on:\n"
+    "  pull_request:\n    types: [opened, synchronize]\n"
+    "  pull_request_target:\n"
+    "  schedule:\n    - cron: '0 0 * * *'\n"
+    "jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make\n",
 ]
 
 
@@ -76,9 +89,17 @@ def _on_value(data):
     return None
 
 
+def _ref_tuple(a):
+    # The full ref classification the host relies on, not just pin state.
+    return (a["name"], a["pinned"], a["kind"], a["ref_kind"],
+            a["looks_like_version"])
+
+
 def _facts_from_pyyaml(text):
     data = yaml.safe_load(text)
-    triggers = set(iw._triggers(_on_value(data)))
+    on_value = _on_value(data)
+    triggers = set(iw._triggers(on_value))
+    details = iw._trigger_details(on_value)
     perms = iw._norm_permissions(data.get("permissions"))
     jobs = {}
     for jname, jdef in (data.get("jobs") or {}).items():
@@ -86,29 +107,31 @@ def _facts_from_pyyaml(text):
         for step in (jdef.get("steps") or []):
             uses = step.get("uses") if isinstance(step, dict) else None
             if isinstance(uses, str):
-                a = iw._classify_action(uses)
-                refs.append((a["name"], a["pinned"], a["kind"]))
+                refs.append(_ref_tuple(iw._classify_action(uses)))
         jobs[str(jname)] = refs
-    return triggers, perms, jobs
+    return triggers, details, perms, jobs
 
 
 def _facts_from_ours(text):
     wf = iw.inspect_workflow_text(text, "x.yml")
     triggers = set(wf["triggers"])
+    details = wf["trigger_details"]
     perms = wf["permissions"]
     jobs = {
-        j["id"]: [(a["name"], a["pinned"], a["kind"]) for a in j["actions"]]
+        j["id"]: [_ref_tuple(a) for a in j["actions"]]
         for j in wf["jobs"]
     }
-    return triggers, perms, jobs, wf["parse_partial"]
+    return triggers, details, perms, jobs, wf["parse_partial"]
 
 
 @pytest.mark.parametrize("text", _CORPUS, ids=range(len(_CORPUS)))
 def test_hand_parser_agrees_with_pyyaml_on_facts(text):
-    ours_triggers, ours_perms, ours_jobs, partial = _facts_from_ours(text)
+    ours_triggers, ours_details, ours_perms, ours_jobs, partial = \
+        _facts_from_ours(text)
     assert partial is False, "corpus entry must parse fully for a fair compare"
-    ref_triggers, ref_perms, ref_jobs = _facts_from_pyyaml(text)
+    ref_triggers, ref_details, ref_perms, ref_jobs = _facts_from_pyyaml(text)
     assert ours_triggers == ref_triggers
+    assert ours_details == ref_details
     assert ours_perms == ref_perms
     assert ours_jobs == ref_jobs
 
@@ -127,14 +150,17 @@ def test_fixture_workflows_match_pyyaml_facts(fixtures_dir):
     for name, full in _iter_fixture_workflows(fixtures_dir):
         with open(full, "r", encoding="utf-8") as fh:
             text = fh.read()
-        ours_triggers, ours_perms, ours_jobs, partial = _facts_from_ours(text)
+        ours_triggers, ours_details, ours_perms, ours_jobs, partial = \
+            _facts_from_ours(text)
         if partial:
             continue  # partial parse is an explicit "uncertain"; not comparable
         try:
-            ref_triggers, ref_perms, ref_jobs = _facts_from_pyyaml(text)
+            ref_triggers, ref_details, ref_perms, ref_jobs = \
+                _facts_from_pyyaml(text)
         except yaml.YAMLError:
             continue  # not valid full YAML; the subset parser may still cope
         assert ours_triggers == ref_triggers, f"{name}: triggers differ"
+        assert ours_details == ref_details, f"{name}: trigger_details differ"
         assert ours_perms == ref_perms, f"{name}: permissions differ"
         assert ours_jobs == ref_jobs, f"{name}: action refs differ"
         compared += 1

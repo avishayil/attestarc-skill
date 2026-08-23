@@ -209,6 +209,34 @@ def test_new_fetch_execute_and_untrusted_input():
         delta["new_untrusted_input_references"]
 
 
+def test_branch_like_mutable_reference_separated_from_version_tag():
+    # A new @main ref (branch-like) is called out as the riskier subset; a new
+    # @v1 ref is mutable but version-shaped and stays out of the branch-like set.
+    before = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                 "    steps:\n      - run: make\n")
+    after = _wf(
+        "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: third-party/branchy@main\n"
+        "      - uses: third-party/tagged@v1\n"
+    )
+    delta = igd._diff_workflow(before, after)
+    assert set(delta["new_mutable_action_references"]) == {
+        "third-party/branchy@main", "third-party/tagged@v1"}
+    assert delta["new_branch_like_mutable_references"] == [
+        "third-party/branchy@main"]
+
+
+def test_no_branch_like_key_when_only_version_tags_added():
+    before = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                 "    steps:\n      - run: make\n")
+    after = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                "    steps:\n      - uses: third-party/tagged@v1.2.3\n")
+    delta = igd._diff_workflow(before, after)
+    assert "third-party/tagged@v1.2.3" in delta["new_mutable_action_references"]
+    assert "new_branch_like_mutable_references" not in delta
+
+
 def test_new_runner_labels_and_artifact_publisher():
     before = _wf("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
                  "    steps:\n      - run: make\n")

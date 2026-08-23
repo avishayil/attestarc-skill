@@ -498,17 +498,31 @@ inferred locally, it SHALL indicate that remote state is not verified.
 ### 12.3 `inspect_workflows.py`
 
 SHALL parse GitHub Actions workflow YAML with a safe, dependency-free parser and
-emit normalized facts per workflow: `triggers`, workflow- and job-level
+emit normalized facts per workflow: `triggers` (a flat list of event names,
+retained for back-compat), `trigger_details` (a per-event map of the qualifiers
+that scope *where* an event fires — `branches`/`branches-ignore`, `tags`/
+`tags-ignore`, `paths`/`paths-ignore`, `types`, and `schedule`'s `cron` list —
+so a `push` restricted to `tags: [v*]` is distinguishable from a branch push;
+the `pull_request` vs `pull_request_target` distinction is preserved as distinct
+keys, and a bare/unqualified event maps to `{}`; the privilege judgment stays
+with the Host), workflow- and job-level
 `permissions`, and per-job `runner`/`self_hosted`, `environment`, `uses`
 (reusable workflow) with `uses_pinned` (whether a job-level reusable-workflow ref
 is a 40-hex SHA), `secrets` (a reusable-workflow call's `secrets:`, normalized to
 `"inherit"` | `{name: source}` | `null`), `uses_cache` (a presence fact: the job
-reads/writes an Actions cache), `actions[]` (`name`, `ref`, `pinned`, `kind`,
+reads/writes an Actions cache), `actions[]` (`name`, `ref`, `pinned`, `ref_kind`,
+`looks_like_version`, `kind`,
 where `kind` distinguishes `local` | `external` | `reusable-workflow` | `docker`
 and `pinned` is true only for an immutable reference — a 40-hex commit SHA for a
 Git-based action or `@sha256:<digest>` for a `docker://` image; a tag or implicit
 `latest` is reported unpinned, and a registry port such as `host:5000/img` is not
-mistaken for a tag), `run_steps[]` (one record per step that runs a command (`has_run: true`),
+mistaken for a tag. `ref_kind` refines `pinned` into `sha` (immutable commit SHA
+or digest) | `movable` (a tag or branch that can be repointed after review) |
+`none` (a local action or a bare reference with no ref), and `looks_like_version`
+is a *hint* — true only for a movable, version-shaped ref such as `v4`/`1.2.3` —
+that helps the Host tell a movable **version tag** from a movable **branch** like
+`@main`; it deliberately does NOT assert tag-vs-branch certainty, which is
+undecidable from the `uses:` string alone since GitHub resolves either), `run_steps[]` (one record per step that runs a command (`has_run: true`),
 references attacker-influenced input, or fetches-and-executes — carrying
 `has_run`, a sanitized whitespace-collapsed `run_excerpt` of the `run:` block
 (source, not runtime data; truncated), `expressions`, `references_untrusted_input`,
@@ -536,7 +550,11 @@ files, and per changed workflow (restricted to the executing **root**
 plus a `security_delta`. The delta SHALL surface capability gains at both the
 workflow and job level: permissions gained (workflow- and job-scoped), new
 privileged or otherwise new triggers, new self-hosted runners and runner-label
-changes, new/newly-mutable action references (external **and** Docker tags), new
+changes, new/newly-mutable action references (external **and** Docker tags) —
+with the newly-mutable set further refined into a `new_branch_like_mutable_references`
+subset (movable refs that are NOT version-shaped, i.e. more likely a branch such
+as `@main` than a cut release tag), the riskier subset the Host weighs against
+`looks_like_version` (§12.3) — new
 reusable-workflow `uses:` (flagging newly-mutable calls), newly passed
 `secrets: inherit`/secret sets, new deployment `environment:`, new cache use, new
 download-and-execute steps, new artifact publish/consume, and new untrusted
