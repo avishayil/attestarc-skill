@@ -11,6 +11,18 @@ opening a public issue. Include enough detail to reproduce the problem.
 
 We aim to acknowledge reports within a few business days.
 
+## Supported versions
+
+AttestArc is distributed as a versioned Agent Skill (`metadata.version` in
+`SKILL.md`). Security fixes are applied to the latest released version; there are
+no long-term support branches. Please upgrade to the latest release before
+reporting, and include the version you observed the issue on.
+
+| Version | Supported          |
+|---------|--------------------|
+| Latest release (`0.2.x`) | :white_check_mark: |
+| Older   | :x:                |
+
 ## Scope
 
 This project is an installable Agent Skill: `SKILL.md`, `references/`, stdlib-only

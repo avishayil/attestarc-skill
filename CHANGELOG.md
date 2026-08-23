@@ -55,6 +55,14 @@ the skill reasons. Findings state is enriched additively (`schema_version` stays
   the `threats/` ownership boundary, the new schema fields and parser facts, and
   the agent tool-use trust policy as normative.
 
+### Fixed
+
+- **Cursor guidance corrected.** Cursor has no native Agent Skills system and
+  does not auto-discover `.claude/skills/`; documentation (README, `SKILL.md`,
+  `SPECIFICATION.md`, installer help) now describes the accurate path — Claude
+  Code loads the skill natively, and Cursor references it via a
+  `.cursor/rules/*.mdc` rule or `AGENTS.md`.
+
 ## [0.1.0] — 2026-08-23
 
 Initial release.
@@ -64,8 +72,8 @@ Initial release.
 - Installable Agent Skill for Claude Code and Cursor; the repository root is the
   skill package (`SKILL.md`, `references/`, `scripts/`, `assets/` at the root).
   Skill version is declared in `SKILL.md` frontmatter (`metadata.version`).
-- `install.py` / `uninstall.py` default to `.claude/skills/attestarc/`, which is
-  discovered by both Claude Code and Cursor; `--platform cursor`/`both` remain
+- `install.py` / `uninstall.py` default to `.claude/skills/attestarc/`, where
+  Claude Code natively discovers Agent Skills; `--platform cursor`/`both` remain
   available. Installation ships only the skill payload, not development files.
 - `SKILL.md` methodology: discover → assess → record → prioritize → explain →
   remediate → verify.

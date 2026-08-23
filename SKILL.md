@@ -9,8 +9,8 @@ description: >
   change or pull request that may alter these security boundaries.
 license: MIT
 compatibility: >
-  Requires git; GitHub CLI (gh) recommended for remote checks. Works in
-  Claude Code and Cursor.
+  Requires git; GitHub CLI (gh) recommended for remote checks. Native Agent
+  Skill for Claude Code; usable in Cursor via a rule that references SKILL.md.
 metadata:
   version: "0.2.0"
 ---

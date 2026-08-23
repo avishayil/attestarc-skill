@@ -6,10 +6,12 @@ payload (SKILL.md, references/, scripts/, assets/, and LICENSE/README) into the
 host's skills location; development-only files (tests/, evals/, the installer,
 pyproject) are not shipped. It never modifies unrelated host config.
 
-The default destination, ``.claude/skills/attestarc/``, is discovered by *both*
-Claude Code and Cursor (Cursor also scans ``.claude/skills/``), so a single
-install serves both clients. Use ``--platform cursor`` only if you specifically
-want a separate ``.cursor`` copy.
+The default destination, ``.claude/skills/attestarc/``, is where Claude Code
+natively discovers Agent Skills. Cursor has no native Skills system and does not
+auto-discover ``.claude/skills/`` — it uses project rules (``.cursor/rules/*.mdc``)
+and ``AGENTS.md``. Use ``--platform cursor`` to place the skill under
+``.cursor/skills/attestarc/`` so a Cursor rule can reference it (it is not
+auto-loaded); see the README's Cursor section.
 
 Examples::
 
@@ -202,8 +204,9 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Install the AttestArc skill")
     p.add_argument("--platform", choices=["claude", "cursor", "both"],
                    default="claude",
-                   help="default 'claude' (.claude/skills is discovered by "
-                        "both Claude Code and Cursor)")
+                   help="default 'claude' (.claude/skills is natively "
+                        "discovered by Claude Code; Cursor needs a rule that "
+                        "references the skill — see the README)")
     p.add_argument("--scope", choices=["project", "user"], default="project")
     p.add_argument("--target", default=None,
                    help="destination repository (project scope only)")
@@ -226,9 +229,9 @@ def main(argv=None) -> int:
                 extra = f" (was {result['installed_version']})"
             print(f"{platform}: {verb} v{result['version']}{extra} -> "
                   f"{result['dest']}")
-            if platform == "claude":
-                print("       (also discovered by Cursor; use "
-                      "--platform cursor only for a separate .cursor copy)")
+            if platform == "cursor":
+                print("       (Cursor does not auto-load this; add a "
+                      ".cursor/rules/attestarc.mdc that references it — see README)")
     except InstallError as exc:
         sys.stderr.write(f"error: {exc}\n")
         return 2
