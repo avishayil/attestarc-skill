@@ -1,6 +1,6 @@
 # AttestArc Specification
 
-- **Status:** Draft — normative for V1 (0.3.x)
+- **Status:** Draft — normative for V1 (0.4.x)
 - **Artifact version tracked:** `SKILL.md` frontmatter `metadata.version`
 - **Audience:** Contributors to `attestarc-skill`. This document is the
   authoritative reference for behavior and architecture. It MUST be kept in
@@ -710,7 +710,7 @@ run interactively against the Host (see §16).
 
 ## 15. Platform scope
 
-The `0.3.x` line is a **Public Preview — GitHub & GitHub Actions**: deep support
+The `0.4.x` line is a **Public Preview — GitHub & GitHub Actions**: deep support
 is scoped to GitHub SCM and GitHub Actions, and other platforms receive only the
 generic methodology at lower confidence. The preview label is a deliberate signal
 that coverage is intentionally narrow, not that the reasoning is provisional.

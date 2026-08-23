@@ -26,7 +26,7 @@ No compliance report.
 It works inside the repository, with the coding agent you already use.
 
 > **Public Preview — GitHub & GitHub Actions.** This is a preview release
-> (`0.3.x`) focused on GitHub repositories and GitHub Actions. Other CI systems
+> (`0.4.x`) focused on GitHub repositories and GitHub Actions. Other CI systems
 > are detected and reviewed with a generic methodology at lower confidence.
 > Treat it as an expert assistant, not a comprehensive or stable release — your
 > judgment stays in the loop, and every finding cites its evidence.
