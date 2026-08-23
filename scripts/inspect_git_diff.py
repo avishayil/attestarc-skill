@@ -29,6 +29,7 @@ import sys
 # Reuse the workflow parser so before/after are normalized identically.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import inspect_workflows as iw  # noqa: E402
+from _pathsafe import is_within_root  # noqa: E402
 
 _WRITE_SENSITIVE = ("id-token", "contents", "packages", "actions",
                     "deployments", "pull-requests")
@@ -81,6 +82,9 @@ def _read_revision(root, rev, path, staged):
     if rev is None and not staged:
         # working tree
         full = os.path.join(root, path)
+        # Untrusted repo: never follow a symlinked working-tree path off-root.
+        if not is_within_root(full, root):
+            return None
         if not os.path.exists(full):
             return None
         try:
