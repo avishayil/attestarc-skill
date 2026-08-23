@@ -33,21 +33,25 @@ GCP Workload Identity Federation, Azure federated credentials):
 - Which subject conditions are required? A trust policy that allows
   `repo:ORG/REPO:*` (any ref, any environment) is far weaker than one scoped to
   `ref:refs/heads/main` or a specific `environment:production`.
-- **Prefer immutable claims over the mutable slug (current 2026 guidance).** The
+- **Prefer immutable claims over the mutable slug**
+  (`KE-oidc-immutable-claims` — this is dated guidance; resolve the current form
+  with `knowledge.py lookup --platform oidc --subject oidc-subject`). The
   `repo:ORG/REPO` subject is a *slug* that changes on rename/transfer and can be
   re-registered by another owner after a repo is deleted/renamed. GitHub's OIDC
   token also carries `repository_id` and `repository_owner_id` — **immutable
   numeric** claims that survive rename/transfer. A trust policy that binds these
   (via custom claim conditions) is more robust than one keyed only on the slug.
-- **Reusable-workflow trust via `job_workflow_ref`.** When the identity should be
-  usable only from a specific reusable workflow, the policy should condition on
-  `job_workflow_ref` (`ORG/REPO/.github/workflows/x.yml@ref`), and — because a ref
-  is movable — pin it to a tag/SHA the maintainer controls. This is how you scope
-  a cloud identity to "only this pipeline", not "any workflow in the repo".
-- **Validate the `aud` (audience).** The relying party (AWS/GCP/Azure or a custom
-  verifier) must check the token audience, and the workflow should request the
-  provider-appropriate audience rather than leaving a permissive default. An
-  unvalidated audience widens which tokens the trust policy will accept.
+- **Reusable-workflow trust via `job_workflow_ref`** (`KE-oidc-job-workflow-ref`).
+  When the identity should be usable only from a specific reusable workflow, the
+  policy should condition on `job_workflow_ref`
+  (`ORG/REPO/.github/workflows/x.yml@ref`), and — because a ref is movable — pin it
+  to a tag/SHA the maintainer controls. This is how you scope a cloud identity to
+  "only this pipeline", not "any workflow in the repo".
+- **Validate the `aud` (audience)** (`KE-oidc-aud-validation`). The relying party
+  (AWS/GCP/Azure or a custom verifier) must check the token audience, and the
+  workflow should request the provider-appropriate audience rather than leaving a
+  permissive default. An unvalidated audience widens which tokens the trust policy
+  will accept.
 - Can an **untrusted trigger** reach the OIDC-enabled job? Correlate with
   `references/github-actions.md`: `pull_request_target`/`workflow_run` +
   `id-token: write` + a broad trust policy is a path from a fork PR to a cloud
@@ -69,10 +73,11 @@ GCP Workload Identity Federation, Azure federated credentials):
 - Note when secrets are available to workflows triggered by untrusted actors, or
   shared across PR and release workloads.
 - Organization secrets exposed to all repositories widen blast radius.
-- **Effective fork-PR reachability is a server-side setting.** Under the platform
-  default a fork `pull_request` gets no secrets, but the repo/org options that
-  send write tokens or secrets to fork PRs (and `secrets: inherit` into reusable
-  workflows) can widen this — you cannot see it in the workflow file. Correlate
+- **Effective fork-PR reachability is a server-side setting**
+  (`KE-gha-fork-pr-exposure-settings`). Under the platform default a fork
+  `pull_request` gets no secrets, but the repo/org options that send write tokens
+  or secrets to fork PRs (and `secrets: inherit` into reusable workflows) can
+  widen this — you cannot see it in the workflow file. Correlate
   with `references/github-actions.md` and `references/github.md`; if the effective
   setting is unverifiable, treat "a fork PR can read this secret" as
   `needs_review` with an `evidence_gap`, not a confident critical or a dismissal.
@@ -81,4 +86,4 @@ GCP Workload Identity Federation, Azure federated credentials):
 
 `domain: identity-secrets`; categories such as `static-cloud-credential`,
 `committed-secret`, `broad-oidc-trust`, `secret-reachable-by-untrusted-trigger`.
-For remediation of exposed credentials, see `references/remediation.md` §secrets.
+For remediation of exposed credentials, see `core/remediation.md` §secrets.

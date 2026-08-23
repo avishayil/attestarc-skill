@@ -22,6 +22,7 @@ Commands::
     state.py upsert finding.json          # or '-' to read from stdin
     state.py set-status AA-GHA-81F21C remediating [--reason ...] [--by ...]
     state.py resolve AA-GHA-81F21C [--observed ... --method ...]
+    state.py reverify [--knowledge index.json]   # or '-' for stdin
     state.py validate
 
 All commands accept ``--file`` (default ``.attestarc/findings.json``).
@@ -41,16 +42,18 @@ from datetime import datetime, timezone
 
 from _pathsafe import PathEscapeError, resolve_within_root, safe_read_text
 
-# Bumped to 3 in v0.4.0: finding.type taxonomy; risk_acceptance nested object
-# (replaces flat accepted_by/reason/accepted_at) with an expires_at; typed
-# related_findings {id, relationship}; assessor_safety_events top-level array.
-# Version 2 (v0.3.0) widened finding ids to 8 hex chars and made the fingerprint
-# hash a canonical ``subject`` rather than the free-text ``condition``.
-SCHEMA_VERSION = 3
+# Bumped to 4 in v0.5.0: optional finding.knowledge_dependencies array
+# ({id, version|content_hash}) recording which verified knowledge entries a
+# conclusion rests on; requires_reverification is a read-time computed view
+# (never a stored field). Version 3 (v0.4.0) added finding.type taxonomy, the
+# risk_acceptance nested object with expires_at, typed related_findings, and
+# assessor_safety_events. Version 2 (v0.3.0) widened finding ids to 8 hex chars
+# and made the fingerprint hash a canonical ``subject``.
+SCHEMA_VERSION = 4
 
 # AttestArc version stamped onto findings as provenance (assessment_version).
 # Bump in lockstep with pyproject/SKILL.md at each release.
-ASSESSMENT_VERSION = "0.4.1"
+ASSESSMENT_VERSION = "0.5.0"
 
 # Persisted string leaves are capped so a hostile tool result cannot turn
 # durable state into a multi-megabyte prompt-injection payload.
@@ -333,6 +336,10 @@ def _migrate_state(state: dict) -> dict:
       fold into a nested ``risk_acceptance`` object;
     * untyped ``related_findings: [str]`` become
       ``[{id, relationship: "contributes_to"}]``.
+
+    v3 -> v4: additive only. ``knowledge_dependencies`` is a new optional field;
+    existing findings simply do not carry it, so the sole change is the
+    ``schema_version`` bump (persisted on the next mutating save).
     """
     version = state.get("schema_version")
     if not isinstance(version, int) or version >= SCHEMA_VERSION:
@@ -412,7 +419,7 @@ def load_state(path: str, *, recover: bool = True, root: str | None = None) -> d
 # --------------------------------------------------------------------------- #
 # Validation (hand-rolled; no jsonschema dependency)
 # --------------------------------------------------------------------------- #
-# Closed vocabularies and key sets mirroring assets/findings.schema.json. Kept
+# Closed vocabularies and key sets mirroring schemas/findings.schema.json. Kept
 # here (not read from the schema) so validation stays stdlib-only and cannot be
 # steered by a tampered schema file. A parity test asserts they match the schema.
 FINDING_TYPES = ("exposure", "attack-path", "hardening")
@@ -431,10 +438,11 @@ _FINDING_KEYS = frozenset({
     "condition", "title", "severity", "confidence", "status", "first_seen",
     "last_seen", "observed_at", "source_revision", "last_verified_at",
     "assessment_version", "evidence", "impact", "threat", "trust_boundary",
-    "related_findings", "remediation", "verification", "risk_acceptance",
-    "extensions",
+    "related_findings", "knowledge_dependencies", "remediation", "verification",
+    "risk_acceptance", "extensions",
 })
 _RELATED_KEYS = frozenset({"id", "relationship"})
+_KNOWLEDGE_DEP_KEYS = frozenset({"id", "version", "content_hash"})
 _RISK_ACCEPTANCE_KEYS = frozenset({
     "accepted_by", "reason", "accepted_at", "expires_at", "extensions",
 })
@@ -524,6 +532,7 @@ def validate_state(state: dict) -> list[str]:
             except StateError as exc:
                 err(f"{where}: {exc}")
         _validate_related_findings(f.get("related_findings"), where, err)
+        _validate_knowledge_dependencies(f.get("knowledge_dependencies"), where, err)
         _validate_risk_acceptance(f.get("risk_acceptance"), where, err)
         _validate_threat(f.get("threat"), where, err)
     return errors
@@ -548,6 +557,25 @@ def _validate_related_findings(rel, where: str, err) -> None:
             err(f"{at}.id has invalid format: {rid!r}")
         if item.get("relationship") not in RELATIONSHIPS:
             err(f"{at}.relationship invalid: {item.get('relationship')!r}")
+
+
+def _validate_knowledge_dependencies(deps, where: str, err) -> None:
+    if deps is None:
+        return
+    if not isinstance(deps, list):
+        err(f"{where}.knowledge_dependencies must be an array")
+        return
+    for j, item in enumerate(deps):
+        at = f"{where}.knowledge_dependencies[{j}]"
+        if not isinstance(item, dict):
+            err(f"{at} must be an object {{id, version|content_hash}}")
+            continue
+        for key in item:
+            if key not in _KNOWLEDGE_DEP_KEYS:
+                err(f"{at} has unknown field: {key}")
+        kid = item.get("id")
+        if not isinstance(kid, str) or not kid:
+            err(f"{at}.id must be a non-empty string")
 
 
 def _validate_risk_acceptance(ra, where: str, err) -> None:
@@ -697,7 +725,8 @@ def upsert_finding(state: dict, finding: dict) -> tuple[dict, bool]:
             for key in ("title", "severity", "confidence", "impact",
                         "remediation", "verification", "category", "domain",
                         "resource", "subject", "condition", "threat",
-                        "trust_boundary", "related_findings", "type"):
+                        "trust_boundary", "related_findings",
+                        "knowledge_dependencies", "type"):
                 if key in incoming:
                     merged[key] = incoming[key]
             merged["evidence"] = _merge_evidence(
@@ -779,6 +808,51 @@ def _with_effective_status(finding: dict, now: str) -> dict:
     view = dict(finding)
     view["effective_status"] = eff
     return view
+
+
+def knowledge_reverification_reasons(finding: dict, index: dict) -> list[str]:
+    """Why a finding needs re-verification given the current knowledge ``index``.
+
+    ``index`` maps knowledge-entry id -> {version?, content_hash?, status?} as
+    reported by ``knowledge.py``. A finding needs re-verification when a knowledge
+    entry its conclusion depended on has since been removed, changed version or
+    content, or is no longer ``active`` (superseded/disputed/retired/draft).
+
+    Pure and read-only: like ``effective_status`` this is a computed VIEW — it
+    never mutates stored status, so a knowledge change never auto-resolves or
+    auto-confirms a finding. state.py deliberately does not read the knowledge
+    plane itself (it is confined to the assessed repo); the caller supplies the
+    index so knowledge lives behind its own root.
+    """
+    reasons: list[str] = []
+    deps = finding.get("knowledge_dependencies")
+    if not isinstance(deps, list):
+        return reasons
+    for dep in deps:
+        if not isinstance(dep, dict):
+            continue
+        kid = dep.get("id")
+        if not isinstance(kid, str) or not kid:
+            continue
+        cur = index.get(kid)
+        if not isinstance(cur, dict):
+            reasons.append(f"{kid}: no longer present in verified knowledge")
+            continue
+        status = cur.get("status")
+        if status and status != "active":
+            reasons.append(f"{kid}: status is now {status}")
+        rv, cv = dep.get("version"), cur.get("version")
+        if rv is not None and cv is not None and rv != cv:
+            reasons.append(f"{kid}: version {rv} -> {cv}")
+        rh, ch = dep.get("content_hash"), cur.get("content_hash")
+        if rh is not None and ch is not None and rh != ch:
+            reasons.append(f"{kid}: content changed")
+    return reasons
+
+
+def requires_reverification(finding: dict, index: dict) -> bool:
+    """True when the finding's knowledge dependencies changed vs ``index``."""
+    return bool(knowledge_reverification_reasons(finding, index))
 
 
 # --------------------------------------------------------------------------- #
@@ -1094,6 +1168,49 @@ def cmd_record_safety_event(args) -> int:
     return 0
 
 
+def cmd_reverify(args) -> int:
+    """List findings whose knowledge dependencies changed (read-time view).
+
+    Reads the current knowledge index (id -> {version?, content_hash?, status?})
+    produced by ``knowledge.py`` from ``--knowledge FILE`` or stdin ('-'), and
+    reports which findings must be re-observed. Never mutates state: a knowledge
+    change resurfaces a finding for re-verification, it does not resolve it.
+    """
+    state = load_state(args.file, root=args.root)
+    src = args.knowledge
+    try:
+        if src == "-":
+            raw = sys.stdin.read()
+        else:
+            with open(src, "r", encoding="utf-8") as fh:
+                raw = fh.read()
+        index = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        sys.stderr.write(f"could not read knowledge index from {src!r}: {exc}\n")
+        return 1
+    if not isinstance(index, dict):
+        sys.stderr.write("knowledge index must be a JSON object "
+                         "(id -> {version?, content_hash?, status?})\n")
+        return 1
+
+    stale = []
+    for f in state.get("findings", []):
+        if not isinstance(f, dict):
+            continue
+        reasons = knowledge_reverification_reasons(f, index)
+        if reasons:
+            stale.append({
+                "id": f.get("id"),
+                "title": f.get("title"),
+                "status": f.get("status"),
+                "requires_reverification": True,
+                "reasons": reasons,
+            })
+    stale.sort(key=lambda r: r.get("id") or "")
+    print(json.dumps(stale, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_validate(args) -> int:
     try:
         state = load_state(args.file, recover=False, root=args.root)
@@ -1180,6 +1297,15 @@ def build_parser() -> argparse.ArgumentParser:
                          "evidence; a content_hash is always recorded")
     sp.add_argument("--action", help="what the assessor did")
     sp.set_defaults(func=cmd_record_safety_event)
+
+    sp = sub.add_parser("reverify", parents=[common],
+                        help="list findings whose verified-knowledge "
+                             "dependencies changed (read-only view)")
+    sp.add_argument("--knowledge", default="-",
+                    help="path to the current knowledge index JSON "
+                         "(id -> {version?, content_hash?, status?}) from "
+                         "knowledge.py, or '-' for stdin (default)")
+    sp.set_defaults(func=cmd_reverify)
 
     sp = sub.add_parser("validate", parents=[common],
                         help="validate the findings file")

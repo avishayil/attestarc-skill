@@ -2,7 +2,7 @@
 
 The canonical vocabulary for `threat.capabilities` in a finding. A **capability**
 is what an attacker can *achieve* once they reach a step or identity — not which
-YAML key or setting happens to exist. `references/methodology.md` introduces the
+YAML key or setting happens to exist. `core/methodology.md` introduces the
 idea and carries a compact inline list for quick reference; **this file is the
 authoritative catalog**. Use these exact tokens so findings correlate across a
 repository (two findings that both grant `PUBLISH_ARTIFACT` are related even if
@@ -15,7 +15,7 @@ Two rules govern how capabilities are used:
 - **A capability is a fact about reach, gated by reachability.** The enabling
   configuration (a write scope, a privileged trigger, a bypass permission) is
   necessary but not sufficient. Record the capability, then walk
-  `present → reachable → exploitable → impactful` (see `references/methodology.md`)
+  `present → reachable → exploitable → impactful` (see `core/methodology.md`)
   before rating anything. `id-token: write` on a protected-tag release grants
   `REQUEST_WORKLOAD_IDENTITY` but is not itself a critical finding.
 - **Capabilities chain.** The interesting findings are where a low-trust actor

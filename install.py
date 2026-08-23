@@ -2,9 +2,10 @@
 """Install the AttestArc skill into Claude Code and/or Cursor.
 
 The repository root *is* the skill package. Installation copies the skill
-payload (SKILL.md, references/, scripts/, assets/, and LICENSE/README) into the
-host's skills location; development-only files (tests/, evals/, the installer,
-pyproject) are not shipped. It never modifies unrelated host config.
+payload (SKILL.md, core/, references/, knowledge/, scripts/, schemas/, and
+LICENSE/README) into the host's skills location; development-only files (tests/,
+evals/, evolution/, the installer, pyproject) are not shipped. It never modifies
+unrelated host config.
 
 The default destination, ``.claude/skills/attestarc/``, is where Claude Code
 natively discovers Agent Skills. Cursor also natively supports Agent Skills: it
@@ -35,10 +36,11 @@ import tempfile
 SKILL_NAME = "attestarc"
 
 # Only these top-level entries are shipped into an installed skill. Everything
-# else in the repo (tests/, evals/, installer, pyproject, CLAUDE.md, ...) is
-# development scaffolding and stays out of the host's skills directory.
-SKILL_PAYLOAD = ("SKILL.md", "references", "scripts", "assets",
-                 "LICENSE", "README.md")
+# else in the repo (tests/, evals/, evolution/, installer, pyproject, CLAUDE.md,
+# THREAT_MODEL.md, SPECIFICATION.md, ...) is development scaffolding and stays out
+# of the host's skills directory.
+SKILL_PAYLOAD = ("SKILL.md", "core", "references", "knowledge", "scripts",
+                 "schemas", "LICENSE", "README.md")
 
 _PLATFORM_DIR = {
     "claude": ".claude",

@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://attestarc.dev/schemas/findings-3.json",
+  "$id": "https://attestarc.dev/schemas/findings-4.json",
   "title": "AttestArc findings state",
   "description": "Structured persistent memory for AttestArc, stored at .attestarc/findings.json. Secret values MUST NOT appear anywhere in this document. Stable objects are closed (additionalProperties:false); host- or tool-specific data goes in the open 'extensions' object.",
   "type": "object",
@@ -9,8 +9,8 @@
   "properties": {
     "schema_version": {
       "type": "integer",
-      "const": 3,
-      "description": "Bumped to 3: finding.type taxonomy; risk_acceptance nested object with expires_at (replaces flat accepted_by/reason/accepted_at); typed related_findings {id, relationship}; assessor_safety_events top-level array. schema_version 2 introduced 8-hex ids and subject-based fingerprints."
+      "const": 4,
+      "description": "Bumped to 4 (additive, ids unchanged): optional finding.knowledge_dependencies array recording which verified knowledge entries a conclusion rests on. requires_reverification is a read-time computed view, not a stored field. Version 3 added finding.type taxonomy, the risk_acceptance object with expires_at, typed related_findings, and assessor_safety_events. Version 2 introduced 8-hex ids and subject-based fingerprints."
     },
     "repository": {
       "type": "object",
@@ -165,6 +165,11 @@
           "items": { "$ref": "#/definitions/related_finding" },
           "description": "Typed links to other findings that form part of the same attack path. Optional."
         },
+        "knowledge_dependencies": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/knowledge_dependency" },
+          "description": "Verified knowledge entries (schemas/knowledge.schema.json) this finding's conclusion rests on. When a referenced entry is superseded or its version/content_hash changes, the finding surfaces requires_reverification at read time and must be re-observed. Optional."
+        },
         "remediation": { "$ref": "#/definitions/remediation" },
         "verification": { "$ref": "#/definitions/verification" },
         "risk_acceptance": { "$ref": "#/definitions/risk_acceptance" },
@@ -174,7 +179,7 @@
     "threat": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Optional attack-path reasoning: how an actor reaches a capability that affects an asset. See references/methodology.md and references/capabilities.md for the vocabulary. MUST NOT contain secret values.",
+      "description": "Optional attack-path reasoning: how an actor reaches a capability that affects an asset. See core/methodology.md and core/capabilities.md for the vocabulary. MUST NOT contain secret values.",
       "properties": {
         "actor": {
           "type": "string",
@@ -195,7 +200,7 @@
         "capabilities": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Capabilities gained, from references/capabilities.md, e.g. EXECUTE_UNTRUSTED_CODE, REQUEST_WORKLOAD_IDENTITY, PUBLISH_ARTIFACT"
+          "description": "Capabilities gained, from core/capabilities.md, e.g. EXECUTE_UNTRUSTED_CODE, REQUEST_WORKLOAD_IDENTITY, PUBLISH_ARTIFACT"
         },
         "target": {
           "type": "string",
@@ -306,6 +311,26 @@
           "type": "string",
           "enum": ["contributes_to", "superseded_by", "duplicate_of"],
           "description": "'contributes_to': this finding is one link in the other's attack path; 'superseded_by': the other replaces this one; 'duplicate_of': the same underlying issue."
+        }
+      }
+    },
+    "knowledge_dependency": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "description": "A pin to a verified knowledge entry (schemas/knowledge.schema.json) that this finding's conclusion depends on. At least one of version or content_hash SHOULD be recorded so a later change can be detected; when the pinned entry is superseded or its version/content_hash no longer matches, the finding surfaces requires_reverification (a read-time computed view) and must be re-observed. A knowledge change never auto-resolves a finding.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The KnowledgeEntry id this finding depends on."
+        },
+        "version": {
+          "type": "string",
+          "description": "The knowledge pack version the entry was read from when the finding was recorded."
+        },
+        "content_hash": {
+          "type": "string",
+          "description": "Hash of the entry's content when the finding was recorded. Changes if the claim is edited."
         }
       }
     },

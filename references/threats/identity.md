@@ -32,10 +32,12 @@ fork-PR-to-cloud-identity path — potentially critical.
 
 The OIDC token carries more than the `repo:ORG/REPO` **slug**, which is *mutable*
 (changes on rename/transfer, re-registerable after deletion). Current guidance
-(2026): a robust policy binds the **immutable** `repository_id` /
-`repository_owner_id` claims; scopes a reusable-workflow identity on
-`job_workflow_ref` pinned to a tag/SHA; and validates the token **audience
-(`aud`)**. A policy trusting only the mutable slug, or accepting any audience, is
+(`KE-oidc-immutable-claims`, `KE-oidc-job-workflow-ref`, `KE-oidc-aud-validation`
+— dated; resolve the current form via the knowledge plane): a robust policy binds
+the **immutable** `repository_id` / `repository_owner_id` claims; scopes a
+reusable-workflow identity on `job_workflow_ref` pinned to a tag/SHA; and
+validates the token **audience (`aud`)**. A policy trusting only the mutable
+slug, or accepting any audience, is
 weaker than the presence of `id-token: write` alone would suggest — reason about
 *which claim conditions* the relying party enforces, not just that OIDC is used.
 
@@ -61,8 +63,9 @@ capability. Reason about blast radius, not just presence:
 ## Effective fork-PR token and secret settings
 
 The common belief "fork `pull_request` gets a read-only token and no secrets" is
-the *default*, not a guarantee. Repository/org/enterprise settings can change the
-effective state — especially on private repositories — via:
+the *default*, not a guarantee (`KE-gha-fork-pr-exposure-settings` — resolve the
+current setting keys via the knowledge plane). Repository/org/enterprise settings
+can change the effective state — especially on private repositories — via:
 
 ```
 run_workflows_from_fork_pull_requests     send_write_tokens_to_workflows

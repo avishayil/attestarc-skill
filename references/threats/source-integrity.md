@@ -60,7 +60,10 @@ affected transition `needs_review` with the setting named as an `evidence_gap`.
 ## SLSA Source as an internal ladder
 
 Use this to reason about *how strong* source integrity is — never to lead the
-user experience with a level number. Levels follow the **SLSA v1.2 Source track**:
+user experience with a level number. Levels follow the **SLSA Source track**
+(`KE-slsa-source-track` pins the version and definitions — SLSA revises the
+spec, so resolve the current track via the knowledge plane; the summary below is
+the last-known-good v1.2 snapshot):
 
 - **L1 — Version controlled.** The source is maintained in a version-control
   system that identifies revisions.

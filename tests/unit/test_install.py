@@ -41,9 +41,17 @@ def test_install_both_project(tmp_path):
         skill_md = os.path.join(str(tmp_path), host, "skills", "attestarc",
                                 "SKILL.md")
         assert os.path.exists(skill_md)
-        # scripts and references travel with the skill
-        assert os.path.exists(os.path.join(str(tmp_path), host, "skills",
-                                           "attestarc", "scripts", "state.py"))
+        base = os.path.join(str(tmp_path), host, "skills", "attestarc")
+        # scripts, kernel, references, knowledge, and schemas travel with the skill
+        assert os.path.exists(os.path.join(base, "scripts", "state.py"))
+        assert os.path.exists(os.path.join(base, "core", "methodology.md"))
+        assert os.path.exists(os.path.join(base, "schemas", "findings.schema.json"))
+        assert os.path.exists(os.path.join(base, "knowledge", "bootstrap",
+                                           "github-actions.jsonl"))
+        # development scaffolding is NOT shipped
+        assert not os.path.exists(os.path.join(base, "tests"))
+        assert not os.path.exists(os.path.join(base, "evolution"))
+        assert not os.path.exists(os.path.join(base, "assets"))
 
 
 def test_install_does_not_touch_unrelated_files(tmp_path):

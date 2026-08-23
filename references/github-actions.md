@@ -10,6 +10,16 @@ classes (untrusted-code execution, workflow-to-workflow privilege bridging, cach
 poisoning, reusable-workflow trust, download-and-execute). This file teaches how
 to observe and remediate them on GitHub Actions.
 
+**Volatile platform facts live in the knowledge plane.** GitHub's fork-PR token
+defaults, the `actions/checkout` fork-PR refusal, the cache write-scope rules, and
+the SHA-pin policy carve-out all *change over time*, so the current fact is not
+baked into this file — it is a versioned, provenance-backed knowledge entry
+(cited inline as `KE-…`). Before you rely on such a fact, resolve the current
+value with `python scripts/knowledge.py lookup --platform github-actions
+--subject <slug>` and record it on the finding's `knowledge_dependencies` (see
+`core/evidence.md`). The reasoning below is durable; the specific defaults it
+mentions are the last-known-good snapshot and may have moved.
+
 ## What to gather first
 
 Run `python scripts/inspect_workflows.py`. For each workflow you get: `triggers`
@@ -42,14 +52,16 @@ repository_dispatch  issue_comment  push  schedule
 Key distinction — **trust of the code being run and the token available**:
 
 - `pull_request` (from a fork) runs with a **read-only** `GITHUB_TOKEN` and no
-  secrets **under the platform default**. Running untrusted PR code here is
-  expected and normally safe.
+  secrets **under the platform default** (`KE-gha-forkpr-token-default`). Running
+  untrusted PR code here is expected and normally safe.
 - `pull_request_target`, `workflow_run`, `issue_comment`, `repository_dispatch`
   run in the context of the **base repository**: they can carry secrets and a
-  writable token, but are triggered by potentially untrusted actors.
+  writable token, but are triggered by potentially untrusted actors
+  (`KE-gha-privileged-trigger-context`).
 
-**Effective fork-PR permissions are a setting, not a constant.** The read-only /
-no-secrets behaviour above is the *default*, and it can be widened server-side:
+**Effective fork-PR permissions are a setting, not a constant** (see
+`KE-gha-forkpr-token-default`). The read-only / no-secrets behaviour above is the
+*default*, and it can be widened server-side:
 the repository/org Actions settings "Send write tokens to workflows from fork
 pull requests" and "Send secrets to workflows from fork pull requests" (common on
 some private-repo configurations) grant a fork PR a writable token and/or
@@ -91,8 +103,9 @@ pull_request_target        # runs with base-repo secrets/token
 a privileged trigger, that is the finding — do not split it up.
 
 **But do not stop at the checkout: the platform now blocks the naive form by
-default.** Modern `actions/checkout` refuses to check out fork-PR code under
-`pull_request_target` / `workflow_run` unless the step sets
+default** (`KE-gha-checkout-forkpr-refusal` — resolve the current behaviour, it
+is version-dependent). Modern `actions/checkout` refuses to check out fork-PR code
+under `pull_request_target` / `workflow_run` unless the step sets
 `with: allow-unsafe-pr-checkout: true`. So the explicit-ref pattern above is only
 directly reachable when that toggle is set (or a version predating the guard is
 pinned). Down-gate accordingly — see `actions/checkout` semantics below — and
@@ -131,7 +144,9 @@ entries are not signed or verified. Reachability is decided by *who can WRITE th
 scope the privileged run restores from* — and the platform's write rules are
 narrow. GitHub scopes each cache entry to the git ref that created it; a run
 restores from its own ref, with fallback to the repository's **default branch**
-(and, for a pull request, its base branch). Walk the write-scope decision tree:
+(and, for a pull request, its base branch) — the write-scope rules are
+`KE-gha-cache-write-triggers` (resolve the current value; these semantics changed
+recently). Walk the write-scope decision tree:
 
 ```
 actor → trigger → which cache scope can this run WRITE?
@@ -269,8 +284,9 @@ Trace to the executing step, not just the checkout.
 
 **The platform down-gate — reason about it, do not hardcode "vN = safe".**
 Modern `actions/checkout` refuses a fork-PR checkout under
-`pull_request_target`/`workflow_run` by default; the refusal is lifted only by
-`with: allow-unsafe-pr-checkout: true`. The inspector emits the facts to decide
+`pull_request_target`/`workflow_run` by default (`KE-gha-checkout-forkpr-refusal`);
+the refusal is lifted only by `with: allow-unsafe-pr-checkout: true`. The
+inspector emits the facts to decide
 reachability: `allow_unsafe_pr_checkout` (the toggle, or absent), and the pinned
 version (`action_ref`, `action_ref_kind`, `action_pinned`). Walk it:
 
@@ -295,9 +311,10 @@ the guard never rules out untrusted code arriving by other means. The mitigation
 is specific to `actions/checkout` — a privileged job can still fetch untrusted
 source itself.
 
-Also note `persist-credentials: true` (the default before you set it false)
-leaves the token on disk for later steps — the inspector emits
-`persist_credentials` — and `fetch-depth`/submodule options that pull additional
+Also note `persist-credentials: true` (the default before you set it false,
+`KE-gha-checkout-persist-credentials`) leaves the token on disk for later steps —
+the inspector emits `persist_credentials` — and `fetch-depth`/submodule options
+that pull additional
 untrusted content. The safe default checkout under a fork `pull_request` is fine;
 the danger is re-pointing it at PR head under a privileged trigger *with the
 refusal disabled*.
@@ -352,7 +369,8 @@ where you cannot, record `needs_review` with an `evidence_gap` — never assume 
 mitigation is present, and never turn its absence into a finding:
 
 - **Require-SHA-pinning policy** (`actions/*` allow-list / "require actions to be
-  pinned to a full-length commit SHA"). Under an enforced policy, a movable
+  pinned to a full-length commit SHA"; `KE-gha-sha-pin-policy-carveout`). Under an
+  enforced policy, a movable
   **Action** `uses:` ref at step level (`@v4`, `@main`) is rejected at run time,
   so that drift path is not reachable the usual way — the finding becomes "policy
   would need to lapse", not "runs arbitrary code now". **Carve-out: the policy
@@ -363,9 +381,10 @@ mitigation is present, and never turn its absence into a finding:
   enforcement; it stays a live drift finding (`mutable-reusable-workflow`). Only
   `step.uses` Action refs are down-gated. When in doubt about which kind a `uses:`
   is, the inspector's `kind` (`external` vs `reusable-workflow`) tells you.
-- **Workflow Execution Protections / fork-PR approval** — "require approval for
-  all outside collaborators" (or all fork PRs) gates whether an untrusted trigger
-  runs at all. An approval-gated fork `pull_request` is not attacker-reachable
+- **Workflow Execution Protections / fork-PR approval**
+  (`KE-gha-workflow-execution-protections`) — "require approval for all outside
+  collaborators" (or all fork PRs) gates whether an untrusted trigger runs at
+  all. An approval-gated fork `pull_request` is not attacker-reachable
   without a maintainer's action; note that human approval is the control and can
   be socially engineered, but it is a real gate.
 - **Allowed-actions and reusable-workflow allow-lists** — restrict which external

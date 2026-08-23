@@ -66,7 +66,9 @@ SCA scanner — reason about *install integrity*, not the CVE list.
 ## SLSA Build as an internal ladder
 
 Use this to reason about build trustworthiness — never to lead with a level.
-Levels follow the **SLSA v1.2 Build track**:
+Levels follow the **SLSA Build track** (`KE-slsa-build-track` pins the version
+and definitions; resolve the current track via the knowledge plane — the summary
+below is the last-known-good v1.2 snapshot):
 
 - **L1** — the build produces provenance describing how it was made.
 - **L2** — that provenance is hosted and authenticated (signed by the build

@@ -120,7 +120,7 @@ def test_init_creates_valid_state(tmp_path):
     assert os.path.exists(path)
     with open(path) as fh:
         data = json.load(fh)
-    assert data["schema_version"] == 3
+    assert data["schema_version"] == 4
     assert data["findings"] == []
     assert validate_ok(data)
 
@@ -550,16 +550,100 @@ def test_upsert_refreshes_observed_at_on_update(tmp_path):
     assert stored2.get("source_revision") == "a" * 40
 
 
-def test_finding_type_is_persisted_and_in_schema(tmp_path, assets_dir):
+def test_finding_type_is_persisted_and_in_schema(tmp_path, schemas_dir):
     path = init_state(tmp_path)
     s = state.load_state(path)
     stored, _ = state.upsert_finding(s, sample_finding(type="attack-path"))
     assert stored["type"] == "attack-path"
-    with open(os.path.join(assets_dir, "findings.schema.json")) as fh:
+    with open(os.path.join(schemas_dir, "findings.schema.json")) as fh:
         schema = json.load(fh)
     assert "type" in schema["definitions"]["finding"]["properties"]
     assert set(schema["definitions"]["finding"]["properties"]["type"]["enum"]) == {
         "exposure", "attack-path", "hardening"}
+
+
+# --------------------------------------------------------------------------- #
+# knowledge dependencies + re-verification (schema v4)
+# --------------------------------------------------------------------------- #
+def _kd_finding(**over):
+    over.setdefault("knowledge_dependencies", [
+        {"id": "KE-gha-cache-write-triggers", "version": "1",
+         "content_hash": "abc"},
+    ])
+    return sample_finding(**over)
+
+
+def test_knowledge_dependencies_round_trip(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    stored, _ = state.upsert_finding(s, _kd_finding())
+    assert stored["knowledge_dependencies"][0]["id"] == "KE-gha-cache-write-triggers"
+    assert validate_ok(s)
+
+
+def test_knowledge_dependencies_refreshed_on_upsert(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    state.upsert_finding(s, _kd_finding())
+    stored, created = state.upsert_finding(s, _kd_finding(
+        knowledge_dependencies=[{"id": "KE-oidc-aud-validation", "version": "2"}]))
+    assert created is False
+    assert stored["knowledge_dependencies"][0]["id"] == "KE-oidc-aud-validation"
+
+
+def test_validate_rejects_bad_knowledge_dependency(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    state.upsert_finding(s, _kd_finding())
+    # Inject an unknown key directly into stored state (untrusted-reload shape).
+    s["findings"][0]["knowledge_dependencies"][0]["bogus"] = "x"
+    errors = state.validate_state(s)
+    assert any("knowledge_dependencies" in e and "unknown field" in e
+               for e in errors)
+
+
+def test_requires_reverification_detects_change():
+    f = {"knowledge_dependencies": [
+        {"id": "KE-a", "version": "1"},
+        {"id": "KE-b", "content_hash": "h1"},
+        {"id": "KE-c", "version": "1"},
+    ]}
+    index = {
+        "KE-a": {"version": "2", "status": "active"},        # version changed
+        "KE-b": {"content_hash": "h1", "status": "superseded"},  # status changed
+        # KE-c missing entirely
+    }
+    reasons = state.knowledge_reverification_reasons(f, index)
+    assert state.requires_reverification(f, index) is True
+    joined = " ".join(reasons)
+    assert "KE-a" in joined and "KE-b" in joined and "KE-c" in joined
+
+
+def test_requires_reverification_stable_when_unchanged():
+    f = {"knowledge_dependencies": [{"id": "KE-a", "version": "1",
+                                     "content_hash": "h"}]}
+    index = {"KE-a": {"version": "1", "content_hash": "h", "status": "active"}}
+    assert state.requires_reverification(f, index) is False
+
+
+def test_reverify_command_never_mutates_state(tmp_path, capsys):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    state.upsert_finding(s, _kd_finding())
+    state.save_state(s, path, root=str(tmp_path))
+    index_path = os.path.join(str(tmp_path), "kindex.json")
+    with open(index_path, "w") as fh:
+        json.dump({"KE-gha-cache-write-triggers":
+                   {"version": "2", "status": "active"}}, fh)
+    capsys.readouterr()  # flush init/setup output so we parse only reverify's
+    rc = run(tmp_path, "reverify", "--knowledge", index_path)
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert len(out) == 1
+    assert out[0]["requires_reverification"] is True
+    # stored status is untouched: the change never auto-resolves the finding.
+    reloaded = state.load_state(path)
+    assert reloaded["findings"][0]["status"] == "open"
 
 
 def test_typed_related_findings_round_trip(tmp_path):
@@ -797,7 +881,7 @@ def test_v1_state_migrates_and_validates(tmp_path, fixtures_dir):
     os.makedirs(os.path.dirname(path))
     _load_fixture_state(fixtures_dir, "v1_state.json", path)
     migrated = state.load_state(path)
-    assert migrated["schema_version"] == 3
+    assert migrated["schema_version"] == 4
     assert validate_ok(migrated)
 
 
@@ -806,7 +890,7 @@ def test_v2_state_migrates_acceptance_and_related_findings(tmp_path, fixtures_di
     os.makedirs(os.path.dirname(path))
     _load_fixture_state(fixtures_dir, "v2_state.json", path)
     migrated = state.load_state(path)
-    assert migrated["schema_version"] == 3
+    assert migrated["schema_version"] == 4
     f = migrated["findings"][0]
     # Flat acceptance fields folded into a nested object.
     assert "accepted_by" not in f and "accepted_at" not in f

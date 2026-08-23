@@ -10,7 +10,8 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(_HERE)
 _SCRIPTS = os.path.join(_REPO_ROOT, "scripts")
-_ASSETS = os.path.join(_REPO_ROOT, "assets")
+_SCHEMAS = os.path.join(_REPO_ROOT, "schemas")
+_KNOWLEDGE = os.path.join(_REPO_ROOT, "knowledge")
 _FIXTURES = os.path.join(_HERE, "fixtures")
 
 if _SCRIPTS not in sys.path:
@@ -27,8 +28,13 @@ def repo_root():
 
 
 @pytest.fixture
-def assets_dir():
-    return _ASSETS
+def schemas_dir():
+    return _SCHEMAS
+
+
+@pytest.fixture
+def knowledge_dir():
+    return _KNOWLEDGE
 
 
 @pytest.fixture

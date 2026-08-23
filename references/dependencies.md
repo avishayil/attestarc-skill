@@ -59,7 +59,7 @@ controls in this repository.
 Missing lock file or absent update tooling is usually `medium` (hygiene /
 defense-in-depth). Dependency-confusion exposure on an internal package that
 CI installs with credentials can be `high`. Rate by reachability and blast
-radius, per `references/severity.md`.
+radius, per `core/severity.md`.
 
 ## Recording
 

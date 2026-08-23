@@ -3,7 +3,7 @@
 The portable attack classes for build/test/release pipelines, framed as
 capability chains. Pair this with `references/github-actions.md` for GitHub
 observation, the parser facts, and remediation. The recurring shape is the
-grammar from `references/methodology.md`:
+grammar from `core/methodology.md`:
 
 ```
 ACTOR → ENTRY POINT → CONTROLLED INPUT → TRUST TRANSITION

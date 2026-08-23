@@ -7,7 +7,7 @@ severity because a control appears in a standard.
 
 Judge by the credible real-world impact **in this repository**, given who can
 reach the weakness and what it grants. Severity is a function of two things you
-should already have from the reasoning grammar (`references/methodology.md`):
+should already have from the reasoning grammar (`core/methodology.md`):
 
 - **Reachability** — where the issue sits on the `present → reachable →
   exploitable → impactful` ladder, and by which actor (`direct`, `conditional`,

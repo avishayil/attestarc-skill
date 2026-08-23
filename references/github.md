@@ -12,7 +12,10 @@ teaches how to observe and remediate those controls on GitHub.
 ## How to observe remote state
 
 If `gh` is authenticated or a GitHub MCP server is available, prefer read-only
-calls, e.g.:
+calls, e.g. (the endpoint set is the knowledge entry
+`KE-ghapi-readonly-observation-endpoints`; resolve the current paths with
+`python scripts/knowledge.py lookup --platform github --subject
+remote-state-endpoints`, as GitHub adds/renames endpoints over time):
 
 ```bash
 gh api repos/{owner}/{repo}                                   # visibility, default branch
@@ -29,8 +32,9 @@ gh api repos/{owner}/{repo}/environments                      # environments
 
 The `actions/permissions/workflow` endpoint reports only the default
 `GITHUB_TOKEN` permission (read vs write) and whether Actions may create/approve
-PRs — **not** whether fork PRs receive write tokens or secrets. That effective
-fork-PR exposure comes from the dedicated `fork-pr-*` endpoints above (the
+PRs — **not** whether fork PRs receive write tokens or secrets
+(`KE-ghapi-fork-pr-permission-semantics`). That effective fork-PR exposure comes
+from the dedicated `fork-pr-*` endpoints above (the
 contributor-approval gate, and for private repositories the token/secret
 exposure setting), and it decides whether a plain `pull_request` is really
 read-only (see `references/github-actions.md`). If the relevant setting cannot be
