@@ -1,0 +1,16 @@
+{
+  "_type": "root",
+  "spec_version": "1.0-attestarc",
+  "version": 1,
+  "expires": "2027-08-24T00:00:00Z",
+  "consistent_snapshot": true,
+  "mode": "bootstrap",
+  "comment": "Trust anchor for the AttestArc knowledge plane. In bootstrap mode the packs are trusted by virtue of shipping inside the SSH-signed skill release; per-role threshold signatures are established by the first signed knowledge release (.github/workflows/release-knowledge.yml, M5), at which point 'mode' becomes 'signed' and 'keys'/'roles' carry maintainer allowed-signer public keys. The signature namespace is 'attestarc-knowledge'.",
+  "keys": {},
+  "roles": {
+    "root": {"keyids": [], "threshold": 1},
+    "timestamp": {"keyids": [], "threshold": 1},
+    "snapshot": {"keyids": [], "threshold": 1},
+    "targets": {"keyids": [], "threshold": 1}
+  }
+}

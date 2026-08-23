@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://attestarc.dev/schemas/knowledge-manifest-1.json",
+  "title": "AttestArc knowledge-plane TUF-inspired metadata",
+  "description": "Trust metadata for the verified-knowledge plane. Four role files (root, timestamp, snapshot, targets) form a delegation chain the deterministic verifier (scripts/knowledge_verify.py) walks before any pack is trusted. In 'bootstrap' mode the packs are trusted because they ship inside the SSH-signed skill release; the first signed knowledge release flips 'mode' to 'signed' and populates role keys/signatures. Signatures are detached SSH signatures (X.json.sig), namespace 'attestarc-knowledge', verified with the system ssh-keygen -Y verify (no Python crypto dependency).",
+  "oneOf": [
+    {"$ref": "#/definitions/root"},
+    {"$ref": "#/definitions/timestamp"},
+    {"$ref": "#/definitions/snapshot"},
+    {"$ref": "#/definitions/targets"}
+  ],
+  "definitions": {
+    "role_spec": {
+      "type": "object",
+      "required": ["keyids", "threshold"],
+      "additionalProperties": false,
+      "properties": {
+        "keyids": {"type": "array", "items": {"type": "string"}},
+        "threshold": {"type": "integer", "minimum": 1}
+      }
+    },
+    "key": {
+      "type": "object",
+      "required": ["keytype", "keyval"],
+      "additionalProperties": false,
+      "properties": {
+        "keytype": {"type": "string", "description": "e.g. ssh-ed25519"},
+        "identity": {"type": "string", "description": "allowed-signers principal (e.g. maintainer email)"},
+        "keyval": {
+          "type": "object",
+          "required": ["public"],
+          "additionalProperties": false,
+          "properties": {"public": {"type": "string", "description": "OpenSSH public key line"}}
+        }
+      }
+    },
+    "root": {
+      "type": "object",
+      "required": ["_type", "version", "expires", "mode", "keys", "roles"],
+      "additionalProperties": true,
+      "properties": {
+        "_type": {"const": "root"},
+        "spec_version": {"type": "string"},
+        "version": {"type": "integer", "minimum": 1},
+        "expires": {"type": "string", "format": "date-time"},
+        "consistent_snapshot": {"type": "boolean"},
+        "mode": {"enum": ["bootstrap", "signed"]},
+        "comment": {"type": "string"},
+        "keys": {"type": "object", "additionalProperties": {"$ref": "#/definitions/key"}},
+        "roles": {
+          "type": "object",
+          "required": ["root", "timestamp", "snapshot", "targets"],
+          "additionalProperties": false,
+          "properties": {
+            "root": {"$ref": "#/definitions/role_spec"},
+            "timestamp": {"$ref": "#/definitions/role_spec"},
+            "snapshot": {"$ref": "#/definitions/role_spec"},
+            "targets": {"$ref": "#/definitions/role_spec"}
+          }
+        }
+      }
+    },
+    "meta_entry": {
+      "type": "object",
+      "required": ["version", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "timestamp": {
+      "type": "object",
+      "required": ["_type", "version", "expires", "meta"],
+      "additionalProperties": true,
+      "properties": {
+        "_type": {"const": "timestamp"},
+        "spec_version": {"type": "string"},
+        "version": {"type": "integer", "minimum": 1},
+        "expires": {"type": "string", "format": "date-time"},
+        "meta": {
+          "type": "object",
+          "required": ["snapshot.json"],
+          "additionalProperties": false,
+          "properties": {"snapshot.json": {"$ref": "#/definitions/meta_entry"}}
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "required": ["_type", "version", "expires", "meta"],
+      "additionalProperties": true,
+      "properties": {
+        "_type": {"const": "snapshot"},
+        "spec_version": {"type": "string"},
+        "version": {"type": "integer", "minimum": 1},
+        "expires": {"type": "string", "format": "date-time"},
+        "meta": {
+          "type": "object",
+          "required": ["targets.json"],
+          "additionalProperties": false,
+          "properties": {"targets.json": {"$ref": "#/definitions/meta_entry"}}
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["name", "version", "sha256", "size", "valid_from"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "integer", "minimum": 1},
+        "previous_version": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size": {"type": "integer", "minimum": 0},
+        "valid_from": {"type": "string", "format": "date"}
+      }
+    },
+    "targets": {
+      "type": "object",
+      "required": ["_type", "version", "expires", "targets"],
+      "additionalProperties": true,
+      "properties": {
+        "_type": {"const": "targets"},
+        "spec_version": {"type": "string"},
+        "version": {"type": "integer", "minimum": 1},
+        "expires": {"type": "string", "format": "date-time"},
+        "targets": {"type": "array", "items": {"$ref": "#/definitions/target"}}
+      }
+    }
+  }
+}

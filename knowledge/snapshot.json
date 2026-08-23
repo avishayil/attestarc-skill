@@ -1,0 +1,12 @@
+{
+  "_type": "snapshot",
+  "spec_version": "1.0-attestarc",
+  "version": 1,
+  "expires": "2027-08-24T00:00:00Z",
+  "meta": {
+    "targets.json": {
+      "version": 1,
+      "sha256": "4010eeedb05fd8092ff0ecf15bab1a50ae9702b6daba25a29c5ea2889e785209"
+    }
+  }
+}

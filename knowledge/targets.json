@@ -1,0 +1,40 @@
+{
+  "_type": "targets",
+  "spec_version": "1.0-attestarc",
+  "version": 1,
+  "expires": "2027-08-24T00:00:00Z",
+  "targets": [
+    {
+      "name": "bootstrap/github-actions.jsonl",
+      "version": 1,
+      "previous_version": 0,
+      "sha256": "1f3f646829769c5a9c995a1dc07472926758d42e73975da78a0b9123c723a1f5",
+      "size": 6134,
+      "valid_from": "2026-08-24"
+    },
+    {
+      "name": "bootstrap/github-scm.jsonl",
+      "version": 1,
+      "previous_version": 0,
+      "sha256": "80b6d62f63b14afc2905f9450576aaa9a74ffd18b9c74b5d76530d38194b575f",
+      "size": 1972,
+      "valid_from": "2026-08-24"
+    },
+    {
+      "name": "bootstrap/identity.jsonl",
+      "version": 1,
+      "previous_version": 0,
+      "sha256": "e0ed3a2f6bc629aa40b90ca7e83ae21c97f847f6654ea779fa6a7f19ab6b24fb",
+      "size": 3460,
+      "valid_from": "2026-08-24"
+    },
+    {
+      "name": "bootstrap/slsa.jsonl",
+      "version": 1,
+      "previous_version": 0,
+      "sha256": "59ec4c1b886077b942b1e0f212a4dd6c55d3e0f1e8c8d34c252e356d655c6fe1",
+      "size": 1605,
+      "valid_from": "2026-08-24"
+    }
+  ]
+}

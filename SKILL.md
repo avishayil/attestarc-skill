@@ -110,6 +110,14 @@ the relevant entry inline as `KE-…`.
   **never reaches the network**. Refreshing knowledge is a separate mode
   (`/attestarc knowledge refresh`, the Updater principal) that the assessor never
   invokes. See `THREAT_MODEL.md` §3.
+- At the start of an assessment, confirm the snapshot verifies (integrity of the
+  bundled packs against the TUF-inspired `targets.json`); if it does not trust,
+  treat platform facts as unavailable and route affected chains to `needs_review`:
+
+  ```bash
+  python "$ATTESTARC/scripts/knowledge_verify.py" verify                 # trusted? + fail-secure facts
+  ```
+
 - Before relying on a `KE-…` fact to close an attack chain, resolve its current
   value:
 
@@ -118,6 +126,11 @@ the relevant entry inline as `KE-…`.
   python "$ATTESTARC/scripts/knowledge.py" lookup --platform github-actions --subject cache-write
   python "$ATTESTARC/scripts/knowledge.py" explain KE-gha-cache-write-triggers
   ```
+
+  For a temporal question (assessing a repository state as of a past date), pass
+  `--as-of YYYY-MM-DD` so `lookup` returns the entry that was in effect then, not
+  today's. To find which findings a knowledge change invalidated, feed
+  `knowledge.py index` into `state.py reverify` (see State, below).
 
 - Only **verified** knowledge (confidence `authoritative`/`corroborated`, status
   `active`) may drive a conclusion. A `candidate` or `disputed` entry may raise an
