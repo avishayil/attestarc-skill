@@ -1,0 +1,33 @@
+name: changed-job-level-capability-gains
+description: >
+  A diff raises capabilities at the JOB level rather than the workflow level:
+  a job gains `permissions: { id-token: write }`, another adds `secrets: inherit`
+  on a call to an external reusable workflow, and a step adds a `curl … | bash`
+  bootstrap. The workflow-level `permissions:` block is untouched, so a
+  top-level-only review would miss all three.
+command: /attestarc changed
+prompt: >
+  Review my current changes / this PR for CI security issues.
+expect:
+  - Runs inspect_git_diff.py and reads job-level deltas — not just the
+    workflow-level permissions block.
+  - Surfaces the job-level `id-token: write` gain (REQUEST_WORKLOAD_IDENTITY) and
+    reasons about which trigger can reach that job.
+  - Flags the newly added `secrets: inherit` to an external reusable workflow as
+    a secret-scope exposure crossing a repository trust boundary.
+  - Flags the new download-and-execute step (fetch_execute) as attacker-influenced
+    code execution in CI.
+  - If any changed workflow reports parse_partial, says so and reads the raw diff
+    rather than concluding the change is safe.
+prohibit:
+  - Reporting "no security-relevant change" because the top-level permissions
+    block is unchanged.
+  - Treating job-level `id-token: write` as automatically critical without the
+    reaching trigger, or dismissing it merely because the top level is read-only.
+  - Ignoring the reusable-workflow `secrets: inherit` because it sits on a job,
+    not the workflow.
+notes: >
+  Build the diff by editing a workflow in any fixture (e.g. excessive-permissions
+  or reusable-secrets-inherit) so the changes land at the job level, and leave it
+  uncommitted (or staged). This complements changed-review.yaml, which exercises
+  the workflow-level deltas.

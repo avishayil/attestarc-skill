@@ -20,7 +20,7 @@ reporting, and include the version you observed the issue on.
 
 | Version | Supported          |
 |---------|--------------------|
-| Latest release (`0.2.x`) | :white_check_mark: |
+| Latest release (`0.3.x`) | :white_check_mark: |
 | Older   | :x:                |
 
 ## Scope

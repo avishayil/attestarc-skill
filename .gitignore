@@ -11,3 +11,6 @@ venv/
 
 # AttestArc local working state (should never be committed here either)
 .attestarc/
+
+# Dev-only eval-run records (local judgments; not source of truth)
+evals/runs/

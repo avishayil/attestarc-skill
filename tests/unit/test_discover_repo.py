@@ -65,8 +65,32 @@ def test_git_repo_remote_and_scm(git_repo):
     result = dr.discover(git_repo)
     assert result["git"]["repository"] is True
     assert "github.com/acme/payment-service" in result["git"]["remote"]
+    assert result["git"]["remote_host"] == "github.com"
+    assert "current_branch" in result["git"]
     assert result["detected"]["scm"] == "github"
     assert result["detected"]["remote_slug"] == "acme/payment-service"
+
+
+def test_embedded_credentials_are_redacted():
+    for url in (
+        "https://x-access-token:ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345@github.com/acme/svc.git",
+        "https://user:supersecrettoken@github.com/acme/svc.git",
+    ):
+        red = dr._redact_remote(url)
+        assert "ghs_" not in red["redacted_url"]
+        assert "supersecrettoken" not in red["redacted_url"]
+        assert "@" not in red["redacted_url"]
+        assert red["host"] == "github.com"
+        assert red["slug"] == "acme/svc"
+
+
+def test_current_branch_not_labeled_default_when_unknown(git_repo):
+    # A fresh local repo has no origin/HEAD, so default_branch is unknown while
+    # current_branch is populated; the two must not be conflated.
+    result = dr.discover(git_repo)
+    assert result["git"]["default_branch"] is None
+    assert any("Default branch could not be determined" in n
+               for n in result["notes"])
 
 
 def test_nested_workflows_are_not_active_ci(tmp_path):

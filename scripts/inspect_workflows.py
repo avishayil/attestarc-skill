@@ -389,21 +389,50 @@ def _fetch_execute_facts(run_text):
     return False, None
 
 
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _classify_docker(uses: str):
+    """Classify a ``docker://`` action reference and its pin state.
+
+    A container image is immutable only when pinned by digest
+    (``image@sha256:<64 hex>``). A ``:tag`` reference — and an implicit
+    ``latest`` when no tag is given — is mutable and can be repointed after
+    review, so ``pinned`` is ``False`` for both. Registry ports
+    (``host:5000/img:tag``) are handled by only treating a ``:`` that follows
+    the final ``/`` as the tag separator.
+    """
+    body = uses[len("docker://"):]
+    if "@" in body:
+        name, ref = body.split("@", 1)
+        return {"name": f"docker://{name}", "ref": ref,
+                "pinned": bool(_DIGEST.match(ref)), "kind": "docker",
+                "uses": uses}
+    last_slash = body.rfind("/")
+    tail = body[last_slash + 1:]
+    if ":" in tail:
+        tail_name, tag = tail.rsplit(":", 1)
+        name = body[:last_slash + 1] + tail_name
+        return {"name": f"docker://{name}", "ref": tag, "pinned": False,
+                "kind": "docker", "uses": uses}
+    # No tag at all -> implicit :latest, which is mutable.
+    return {"name": f"docker://{body}", "ref": None, "pinned": False,
+            "kind": "docker", "uses": uses}
+
+
 def _classify_action(uses: str):
     uses = uses.strip()
+    if uses.startswith(("./", "../")):
+        return {"name": uses, "ref": None, "pinned": None, "kind": "local",
+                "uses": uses}
+    if uses.startswith("docker://"):
+        return _classify_docker(uses)
     kind = "external"
     name, ref = uses, None
-    if uses.startswith(("./", "../")):
-        kind = "local"
-        name = uses
-    elif uses.startswith("docker://"):
-        kind = "docker"
-        name = uses
-    else:
-        if "@" in uses:
-            name, ref = uses.rsplit("@", 1)
-        if re.search(r"\.ya?ml$", name) or "/.github/workflows/" in name:
-            kind = "reusable-workflow"
+    if "@" in uses:
+        name, ref = uses.rsplit("@", 1)
+    if re.search(r"\.ya?ml$", name) or "/.github/workflows/" in name:
+        kind = "reusable-workflow"
     pinned = None
     if ref is not None:
         pinned = bool(_SHA40.match(ref))

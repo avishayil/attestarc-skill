@@ -29,7 +29,11 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install test dependencies
-        run: python -m pip install --upgrade pip pytest
+      # Pinned and hash-locked (see ci-constraints.txt): a moved tag or a
+      # compromised re-release cannot change what CI installs. --require-hashes
+      # forces every dependency to match a recorded sha256; --only-binary avoids
+      # building from an sdist whose hash is not recorded.
+      - name: Install pinned test dependencies
+        run: python -m pip install --require-hashes --only-binary=:all: -r ci-constraints.txt
       - name: Run tests (stdlib-only helpers)
         run: python -m pytest

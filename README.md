@@ -6,7 +6,7 @@ Security expertise for your coding agent.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Getting started](https://img.shields.io/badge/docs-getting%20started-38BDF8.svg)](https://avishay.co.il/attestarc-skill/)
 
-Install AttestArc into Claude Code (or wire it into Cursor) and run:
+Install AttestArc into Claude Code or Cursor and run:
 
     /attestarc
 
@@ -18,6 +18,12 @@ No scanner service.
 No compliance report.
 
 It works inside the repository, with the coding agent you already use.
+
+> **Public Preview — GitHub & GitHub Actions.** This is a preview release
+> (`0.3.x`) focused on GitHub repositories and GitHub Actions. Other CI systems
+> are detected and reviewed with a generic methodology at lower confidence.
+> Treat it as an expert assistant, not a comprehensive or stable release — your
+> judgment stays in the loop, and every finding cites its evidence.
 
 **New here?** Start with the [getting-started site](https://avishay.co.il/attestarc-skill/).
 
@@ -39,28 +45,32 @@ The principle:
 
 ### Prerequisites
 
-- **Python 3.8+** (standard library only — no third-party packages) and **git**.
+- **Python 3.9+** (standard library only — no third-party packages) and **git**.
 - **GitHub CLI (`gh`)** — optional, recommended for read-only remote checks
   (branch protection, rulesets, Actions policy).
 
 ### Claude Code (recommended)
 
 AttestArc is a native Claude Agent Skill: Claude Code automatically discovers
-skills under `.claude/skills/`. The simplest install is a clone:
+skills under `.claude/skills/`. The simplest install is a clone of a signed
+release tag (releases are published as signed, protected git tags, so a pinned
+tag can't be moved out from under you):
 
 ```bash
 # Global — available in every repository you open
-git clone https://github.com/avishayil/attestarc-skill.git ~/.claude/skills/attestarc
+git clone --branch v0.3.0 --depth 1 \
+  https://github.com/avishayil/attestarc-skill.git ~/.claude/skills/attestarc
 
 # Or per-project — scoped to one repository
-git clone https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc
+git clone --branch v0.3.0 --depth 1 \
+  https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc
 ```
 
 Prefer to copy only the skill payload (leaving development files behind)? Use the
 installer:
 
 ```bash
-git clone https://github.com/avishayil/attestarc-skill.git
+git clone --branch v0.3.0 --depth 1 https://github.com/avishayil/attestarc-skill.git
 cd attestarc-skill
 
 python install.py                                  # current project → .claude/skills/attestarc/
@@ -72,30 +82,33 @@ Then, in Claude Code, run `/attestarc`.
 
 ### Cursor
 
-Cursor does **not** have a native Skills system — it uses project **rules**
-(`.cursor/rules/*.mdc`) and `AGENTS.md`, and it does not auto-discover
-`.claude/skills/`. You can still use AttestArc in Cursor by cloning the skill and
-pointing a rule at it:
+Cursor natively supports Agent Skills. It auto-discovers skills from
+`.cursor/skills/` and `.agents/skills/` (per-project) and their user-level
+equivalents, and for compatibility it also loads Claude and Codex skill
+directories (`.claude/skills/`, `.codex/skills/`). A skill's frontmatter `name`
+must match its parent folder — AttestArc installs into a folder named
+`attestarc`, so this is already satisfied. No `.cursor/rules/*.mdc` rule is
+needed.
+
+Clone a signed release tag into Cursor's native skills directory:
 
 ```bash
-git clone https://github.com/avishayil/attestarc-skill.git .cursor/attestarc
+# Cursor-native, per-project
+git clone --branch v0.3.0 --depth 1 \
+  https://github.com/avishayil/attestarc-skill.git .cursor/skills/attestarc
 ```
 
-Create `.cursor/rules/attestarc.mdc`:
+Or reuse a shared Claude skills directory, which Cursor also reads:
 
-```mdc
----
-description: AttestArc — software supply-chain security assessment and remediation
-alwaysApply: false
----
-When asked to assess, harden, review, or remediate repository / CI-CD /
-GitHub Actions / dependency / secrets / supply-chain security, act as the
-security engineer described in `.cursor/attestarc/SKILL.md`. Follow its
-lifecycle, and load the files under `.cursor/attestarc/references/` on demand.
+```bash
+git clone --branch v0.3.0 --depth 1 \
+  https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc
 ```
 
-Then ask Cursor's agent to *"assess this repository's supply-chain security with
-AttestArc"* (or `@`-mention the rule).
+Then, in Cursor's Agent chat, invoke it with `/attestarc` (skills appear in the
+`/` slash search), or just ask Cursor to *"assess this repository's supply-chain
+security with AttestArc."* `python install.py --platform cursor` installs into
+`.cursor/skills/attestarc` for you.
 
 ### Uninstall
 

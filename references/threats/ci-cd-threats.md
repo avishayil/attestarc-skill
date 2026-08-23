@@ -60,16 +60,23 @@ Actions caches are **not signed or verified**. That makes them a trust boundary
 of their own (`cache-trust-boundary`):
 
 ```
-low-trust writer (fork PR job) → cache key → privileged job restores it
-                               → executable / tool / build-script / dependency runs
-                               → EXECUTE_UNTRUSTED_CODE in the privileged context
+low-trust writer (a run an untrusted actor can influence)
+        → cache key in a scope the privileged run reads
+        → privileged job restores it
+        → executable / tool / build-script / dependency runs
+        → EXECUTE_UNTRUSTED_CODE in the privileged context
 ```
 
-Ask: can low-trust code write this cache (which triggers populate the key)? Can a
-more privileged workflow later restore it? Does the restored content include
-executables, compiled tools, build scripts, or dependency directories that then
-run? A cache scoped to and written only by trusted refs does not close the chain.
-`inspect_workflows.py` surfaces `uses_cache` per job as a starting fact.
+The load-bearing question is **scope**: caches are keyed *and scoped*, and a
+privileged run only restores from scopes it is allowed to read. Ask: can low-trust
+code write a cache **in a scope the privileged job restores from** (not merely
+write *some* cache)? Can that privileged workflow later restore it? Does the
+restored content include executables, compiled tools, build scripts, or dependency
+directories that then run? A cache written only by trusted refs, or in a scope the
+privileged run never reads, does not close the chain — an isolated fork-PR scope
+is the common example (see `references/github-actions.md` for GitHub's exact scope
+and fallback rules). `inspect_workflows.py` surfaces `uses_cache` per job as a
+starting fact.
 
 ## Reusable-workflow transitive trust
 

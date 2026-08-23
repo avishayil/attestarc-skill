@@ -103,6 +103,48 @@ def test_local_and_docker_and_reusable():
 
 
 # --------------------------------------------------------------------------- #
+# docker image mutability: digest = immutable, tag / implicit-latest = mutable
+# --------------------------------------------------------------------------- #
+def test_docker_tag_is_mutable():
+    a = iw._classify_action("docker://alpine:3.19")
+    assert a["kind"] == "docker"
+    assert a["pinned"] is False
+    assert a["ref"] == "3.19"
+    assert a["name"] == "docker://alpine"
+
+
+def test_docker_implicit_latest_is_mutable():
+    a = iw._classify_action("docker://alpine")
+    assert a["kind"] == "docker"
+    assert a["pinned"] is False
+    assert a["ref"] is None
+
+
+def test_docker_digest_is_pinned():
+    digest = "sha256:" + "a" * 64
+    a = iw._classify_action(f"docker://alpine@{digest}")
+    assert a["kind"] == "docker"
+    assert a["pinned"] is True
+    assert a["ref"] == digest
+
+
+def test_docker_registry_port_tag_not_confused():
+    # A registry port (:5000) must not be read as the image tag.
+    a = iw._classify_action("docker://registry.example.com:5000/team/img:1.2")
+    assert a["kind"] == "docker"
+    assert a["pinned"] is False
+    assert a["ref"] == "1.2"
+    assert a["name"] == "docker://registry.example.com:5000/team/img"
+
+
+def test_docker_registry_port_no_tag_is_mutable():
+    a = iw._classify_action("docker://registry.example.com:5000/team/img")
+    assert a["kind"] == "docker"
+    assert a["pinned"] is False
+    assert a["ref"] is None
+
+
+# --------------------------------------------------------------------------- #
 # fixture-level facts
 # --------------------------------------------------------------------------- #
 def test_secure_repo_is_clean_at_fact_level(fixtures_dir):

@@ -52,6 +52,13 @@ def init_state(tmp_path):
     return path
 
 
+def run(tmp_path, *args):
+    """Invoke the CLI with --root bound to tmp_path (write confinement base)."""
+    return state.main(["--file",
+                       os.path.join(str(tmp_path), ".attestarc", "findings.json"),
+                       *args, "--root", str(tmp_path)])
+
+
 # --------------------------------------------------------------------------- #
 # fingerprints / ids
 # --------------------------------------------------------------------------- #
@@ -70,8 +77,30 @@ def test_display_id_format_and_github_actions_prefix():
     fid = state.display_id(fp, "ci", "mutable-action",
                            ".github/workflows/release.yml")
     assert fid.startswith("AA-GHA-")
-    assert len(fid.split("-")[-1]) == 6
-    assert fid.split("-")[-1] == fp[:6].upper()
+    assert len(fid.split("-")[-1]) == 8
+    assert fid.split("-")[-1] == fp[:8].upper()
+
+
+def test_fingerprint_ignores_condition_rewording():
+    # The free-text condition is NOT part of the fingerprint; re-wording the
+    # human explanation of the same issue must keep the same id.
+    base = dict(domain="ci", category="mutable-action",
+                resource=".github/workflows/release.yml", subject="docker/login-action")
+    a = state.compute_fingerprint(base["domain"], base["category"],
+                                  base["resource"], base["subject"])
+    # subject drives disambiguation; a different subject on the same resource
+    # is a genuinely different finding.
+    b = state.compute_fingerprint(base["domain"], base["category"],
+                                  base["resource"], "actions/checkout")
+    assert a != b
+
+
+def test_fingerprint_canonicalizes_casing_and_separators():
+    a = state.compute_fingerprint("ci", "mutable-action",
+                                  ".github/workflows/Release.yml", "X")
+    b = state.compute_fingerprint("ci", "mutable-action",
+                                  ".github\\workflows\\release.yml", "x")
+    assert a == b
 
 
 def test_id_prefix_per_domain():
@@ -91,7 +120,7 @@ def test_init_creates_valid_state(tmp_path):
     assert os.path.exists(path)
     with open(path) as fh:
         data = json.load(fh)
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
     assert data["findings"] == []
     assert validate_ok(data)
 
@@ -225,7 +254,7 @@ def test_upsert_accepts_explicit_fingerprint(tmp_path):
     f["fingerprint"] = fp
     stored, _ = state.upsert_finding(s, f)
     assert stored["fingerprint"] == fp
-    assert stored["id"].endswith(fp[:6].upper())
+    assert stored["id"].endswith(fp[:8].upper())
 
 
 # --------------------------------------------------------------------------- #
@@ -238,24 +267,24 @@ def test_cli_upsert_get_list_setstatus_resolve(tmp_path, capsys):
     with open(finding_file, "w") as fh:
         json.dump(sample_finding(), fh)
 
-    assert state.main(["--file", path, "upsert", finding_file]) == 0
+    assert run(tmp_path, "upsert", finding_file) == 0
     out = json.loads(capsys.readouterr().out)
     fid = out["id"]
     assert out["action"] == "created"
 
-    assert state.main(["--file", path, "get", fid]) == 0
+    assert run(tmp_path, "get", fid) == 0
     got = json.loads(capsys.readouterr().out)
     assert got["id"] == fid
 
-    assert state.main(["--file", path, "list", "--status", "open"]) == 0
+    assert run(tmp_path, "list", "--status", "open") == 0
     listed = json.loads(capsys.readouterr().out)
     assert len(listed) == 1
 
-    assert state.main(["--file", path, "set-status", fid, "remediating"]) == 0
+    assert run(tmp_path, "set-status", fid, "remediating") == 0
     capsys.readouterr()
 
-    assert state.main(["--file", path, "resolve", fid,
-                       "--observed", "immutable full commit SHA"]) == 0
+    assert run(tmp_path, "resolve", fid,
+               "--observed", "immutable full commit SHA") == 0
     res = json.loads(capsys.readouterr().out)
     assert res["status"] == "resolved"
 
@@ -269,7 +298,7 @@ def test_cli_upsert_stdin(tmp_path, capsys, monkeypatch):
     path = init_state(tmp_path)
     capsys.readouterr()  # discard init output
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(sample_finding())))
-    assert state.main(["--file", path, "upsert", "-"]) == 0
+    assert run(tmp_path, "upsert", "-") == 0
     out = json.loads(capsys.readouterr().out)
     assert out["action"] == "created"
 
@@ -286,14 +315,14 @@ def test_cli_list_sorted_by_severity(tmp_path, capsys):
         severity="medium", category="c", resource="c"))
     state.save_state(s, path)
 
-    state.main(["--file", path, "list"])
+    run(tmp_path, "list")
     listed = json.loads(capsys.readouterr().out)
     assert [f["severity"] for f in listed] == ["critical", "medium", "low"]
 
 
 def test_get_unknown_id_returns_error(tmp_path):
-    path = init_state(tmp_path)
-    assert state.main(["--file", path, "get", "AA-GHA-000000"]) == 1
+    init_state(tmp_path)
+    assert run(tmp_path, "get", "AA-GHA-00000000") == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -324,7 +353,7 @@ def test_validate_command_fails_on_corrupt_without_recovery(tmp_path):
     path = init_state(tmp_path)
     with open(path, "w") as fh:
         fh.write("not json")
-    assert state.main(["--file", path, "validate"]) == 1
+    assert run(tmp_path, "validate") == 1
 
 
 def test_atomic_write_leaves_no_temp_files(tmp_path):
@@ -425,3 +454,72 @@ def test_threat_may_reference_secret_name(tmp_path):
     stored, created = state.upsert_finding(s, ok)
     assert created is True
     assert stored["threat"]["target"] == "production AWS_DEPLOY_KEY"
+
+
+# --------------------------------------------------------------------------- #
+# secret scan over ALL string leaves (not just evidence/threat)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("field,value", [
+    ("title", "leaked ghp_012345678901234567890123456789abcd token"),
+    ("impact", "AKIAIOSFODNN7EXAMPLE grants deploy access"),
+])
+def test_upsert_rejects_secret_in_top_level_text(tmp_path, field, value):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    bad = sample_finding(**{field: value})
+    with pytest.raises(state.StateError):
+        state.upsert_finding(s, bad)
+
+
+def test_upsert_rejects_secret_in_remediation(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    bad = sample_finding()
+    bad["remediation"] = dict(bad["remediation"],
+                              summary="rotate AKIAIOSFODNN7EXAMPLE now")
+    with pytest.raises(state.StateError):
+        state.upsert_finding(s, bad)
+
+
+def test_upsert_rejects_secret_in_extensions(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    bad = sample_finding(extensions={"note": "token AKIAIOSFODNN7EXAMPLE"})
+    with pytest.raises(state.StateError):
+        state.upsert_finding(s, bad)
+
+
+# --------------------------------------------------------------------------- #
+# durable string size cap (anti prompt-injection payload inflation)
+# --------------------------------------------------------------------------- #
+def test_long_string_leaf_is_truncated(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    huge = "A" * (state._MAX_STRING_LEN * 3)
+    f = sample_finding(impact=huge)
+    stored, _ = state.upsert_finding(s, f)
+    assert len(stored["impact"]) <= state._MAX_STRING_LEN
+    assert stored["impact"].endswith(state._TRUNCATION_MARKER)
+
+
+# --------------------------------------------------------------------------- #
+# write confinement / symlink escape
+# --------------------------------------------------------------------------- #
+def test_refuses_write_when_attestarc_is_symlink_escaping_root(tmp_path):
+    import os as _os
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    outside.mkdir()
+    # .attestarc inside the repo is a symlink pointing outside the repo.
+    _os.symlink(str(outside), str(repo / ".attestarc"))
+    path = str(repo / ".attestarc" / "findings.json")
+    rc = state.main(["--file", path, "init", "--root", str(repo)])
+    assert rc == 2  # StateError -> exit 2; nothing written outside the repo
+    assert not (outside / "findings.json").exists()
+
+
+def test_atomic_write_confinement_allows_in_root(tmp_path):
+    # Sanity: a normal in-root write is permitted.
+    path = init_state(tmp_path)
+    assert os.path.exists(path)

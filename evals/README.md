@@ -23,6 +23,24 @@ against the rubric below.
 4. Judge the transcript against the case's `expect` / `prohibit` lists and the
    rubric.
 
+## Recording a run (optional)
+
+`record.py` is a dev-only helper that **persists your judgment** — it never
+scores the agent (there is deliberately no eval-runner engine; see above). After
+you judge a run, append it to a local JSONL log so runs are comparable across
+hosts, models, and skill versions:
+
+```bash
+python evals/record.py list                 # available cases
+python evals/record.py show <case>          # print a case spec
+python evals/record.py record <case> --host claude-code --model opus-4.8 \
+    --verdict pass --expect-met 4/4 --prohibit-clean yes --note "…"
+```
+
+Records land in `evals/runs/records.jsonl` (git-ignored — local judgments, not
+source of truth). The tool is stdlib-only and, like everything under `evals/`,
+is not part of the shipped skill.
+
 ## Rubric
 
 A good AttestArc run:
