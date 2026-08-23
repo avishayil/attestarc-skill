@@ -359,7 +359,7 @@ def test_fetch_execute_wget_chmod():
     assert "wget" in steps[0]["fetch_execute_excerpt"]
 
 
-def test_benign_run_without_expression_is_not_recorded():
+def test_benign_run_is_recorded_with_excerpt():
     wf = iw.inspect_workflow_text(
         "on: push\n"
         "jobs:\n"
@@ -369,8 +369,36 @@ def test_benign_run_without_expression_is_not_recorded():
         "      - run: echo hello world\n",
         "ci.yml",
     )
-    # No ${{ }} expression and no fetch-execute -> the step is not recorded.
-    assert wf["jobs"][0]["run_steps"] == []
+    # Every ``run:`` step is a fact: command execution the host may need to
+    # reason about, even with no expression and no fetch-execute. It carries a
+    # compact, sanitized excerpt but no untrusted/fetch signal.
+    steps = wf["jobs"][0]["run_steps"]
+    assert len(steps) == 1
+    assert steps[0]["has_run"] is True
+    assert steps[0]["run_excerpt"] == "echo hello world"
+    assert steps[0]["expressions"] == []
+    assert steps[0]["references_untrusted_input"] == []
+    assert steps[0]["fetch_execute"] is False
+
+
+def test_benign_uses_step_with_trusted_expression_is_not_a_run_step():
+    # A ``uses:`` step whose only expression is trusted (``matrix.*``) is an
+    # action, not command execution: it belongs to ``actions`` and must not be
+    # forced into ``run_steps`` (the pre-fix behavior that inflated run_steps).
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/setup-node@v4\n"
+        "        with:\n"
+        "          node-version: ${{ matrix.node }}\n",
+        "ci.yml",
+    )
+    job = wf["jobs"][0]
+    assert job["run_steps"] == []
+    assert [a["name"] for a in job["actions"]] == ["actions/setup-node"]
 
 
 def test_run_step_with_expression_recorded_without_fetch_execute():
@@ -388,3 +416,97 @@ def test_run_step_with_expression_recorded_without_fetch_execute():
     assert steps[0]["fetch_execute"] is False
     assert steps[0]["fetch_execute_excerpt"] is None
     assert steps[0]["expressions"] == ["github.sha"]
+
+
+# --------------------------------------------------------------------------- #
+# Regression tests for parser bugs found in the v0.3.0 real-repo feedback pass
+# --------------------------------------------------------------------------- #
+def test_leading_document_start_marker_does_not_drop_facts():
+    # A leading ``---`` must not make the whole workflow parse as a block
+    # sequence (which returned a list and discarded every fact).
+    wf = iw.inspect_workflow_text(
+        "---\n"
+        "name: CI\n"
+        "on: [push]\n"
+        "permissions:\n"
+        "  contents: read\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - run: pytest\n",
+        "ci.yml",
+    )
+    assert wf["parse_partial"] is False
+    assert wf["name"] == "CI"
+    assert wf["triggers"] == ["push"]
+    assert wf["permissions"] == {"contents": "read"}
+    assert [j["id"] for j in wf["jobs"]] == ["build"]
+
+
+def test_trailing_document_end_marker_is_ignored():
+    wf = iw.inspect_workflow_text(
+        "name: CI\n"
+        "on: [push]\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: pytest\n"
+        "...\n",
+        "ci.yml",
+    )
+    assert wf["parse_partial"] is False
+    assert [j["id"] for j in wf["jobs"]] == ["build"]
+
+
+def test_block_sequence_at_same_indent_as_key_is_parsed():
+    # ``steps:`` and its ``- `` items at the SAME column is common GitHub
+    # Actions style; the items must not be dropped.
+    wf = iw.inspect_workflow_text(
+        "name: CI\n"
+        "on:\n"
+        "  push:\n"
+        "    branches: [main]\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "    - uses: actions/checkout@v4\n"
+        "    - uses: actions/cache@v4\n"
+        "    - run: pytest -q\n",
+        "ci.yml",
+    )
+    assert wf["parse_partial"] is False
+    job = wf["jobs"][0]
+    assert [a["name"] for a in job["actions"]] == [
+        "actions/checkout",
+        "actions/cache",
+    ]
+    assert job["uses_cache"] is True
+    assert len(job["run_steps"]) == 1
+    assert job["run_steps"][0]["run_excerpt"] == "pytest -q"
+
+
+def test_fetch_execute_matches_language_interpreters():
+    # ``curl ... | python3 -`` (and node/ruby/perl) is fetch-then-execute just
+    # like ``| bash``.
+    for cmd in (
+        "curl -sSL https://example.com/i.py | python3 -",
+        "wget -qO- https://example.com/i.js | node",
+        "curl https://example.com/i.rb | ruby",
+    ):
+        matched, excerpt = iw._fetch_execute_facts(cmd)
+        assert matched is True, cmd
+        assert excerpt == cmd
+    # A pinned package install is not fetch-execute.
+    assert iw._fetch_execute_facts("pip install requests==2.31.0")[0] is False
+
+
+def test_run_excerpt_is_whitespace_collapsed_and_truncated():
+    long_run = "echo start\n" + ("x" * 500) + "\necho end"
+    excerpt = iw._run_excerpt(long_run)
+    assert "\n" not in excerpt
+    assert excerpt.endswith("...")
+    assert len(excerpt) == 203  # 200 chars + "..."

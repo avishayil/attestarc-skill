@@ -50,6 +50,19 @@ _CORPUS = [
     # write-all string permissions
     "on: push\npermissions: write-all\n"
     "jobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n",
+    # leading document-start marker (must not be read as a sequence item)
+    "---\n"
+    "name: CI\non: [push]\n"
+    "permissions:\n  contents: read\n"
+    "jobs:\n  build:\n    runs-on: ubuntu-latest\n"
+    "    steps:\n      - uses: actions/checkout@v4\n      - run: pytest\n",
+    # block sequence indented at the SAME column as its ``steps:`` key
+    "name: CI\non:\n  push:\n    branches: [main]\n"
+    "jobs:\n  test:\n    runs-on: ubuntu-latest\n"
+    "    steps:\n"
+    "    - uses: actions/checkout@v4\n"
+    "    - uses: actions/cache@v4\n"
+    "    - run: pytest -q\n",
 ]
 
 

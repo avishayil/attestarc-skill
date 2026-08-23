@@ -508,9 +508,15 @@ where `kind` distinguishes `local` | `external` | `reusable-workflow` | `docker`
 and `pinned` is true only for an immutable reference — a 40-hex commit SHA for a
 Git-based action or `@sha256:<digest>` for a `docker://` image; a tag or implicit
 `latest` is reported unpinned, and a registry port such as `host:5000/img` is not
-mistaken for a tag), `run_steps[]` (`expressions`, `references_untrusted_input`, `fetch_execute`, and
-`fetch_execute_excerpt` — the sanitized matched command line when a
-fetch-then-execute one-liner such as `curl … | sh` is present), and
+mistaken for a tag), `run_steps[]` (one record per step that runs a command (`has_run: true`),
+references attacker-influenced input, or fetches-and-executes — carrying
+`has_run`, a sanitized whitespace-collapsed `run_excerpt` of the `run:` block
+(source, not runtime data; truncated), `expressions`, `references_untrusted_input`,
+`fetch_execute`, and `fetch_execute_excerpt` — the matched command line when a
+fetch-then-execute one-liner such as `curl … | sh` **or** a network fetch piped
+into a language interpreter such as `curl … | python3 -`/`| node`/`| ruby` is
+present; a benign `uses:` step whose only expressions are trusted, e.g.
+`${{ matrix.* }}`, stays in `actions[]` and is not reported as a run step), and
 `checkout_refs[]` (`references_untrusted_ref`). These are facts only: whether a
 `fetch_execute`, an inherited secret, a mutable reusable ref, or a restored cache
 matters is the Host's judgment, informed by the job's trigger and privilege. It

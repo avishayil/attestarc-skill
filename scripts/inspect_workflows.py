@@ -64,8 +64,13 @@ _UNTRUSTED_REF_NEEDLES = (
 # is a fact (the matched command line), not a verdict -- the host decides
 # whether it matters given the job's trigger and privilege.
 _FETCH_EXEC_PATTERNS = (
-    # curl/wget ... | sh|bash|zsh (optionally sudo, optional path prefix)
-    re.compile(r"\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?\S*sh\b"),
+    # curl/wget ... | <interpreter>  (optionally sudo, optional path prefix).
+    # Covers shells (sh/bash/zsh) and language interpreters piped straight from
+    # the network (e.g. ``curl ... | python3 -``, ``| node``, ``| ruby``).
+    re.compile(
+        r"\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?\S*"
+        r"(?:sh|bash|zsh|python3?|perl|ruby|node|php)\b"
+    ),
     # curl/wget ... && chmod +x  (download, make executable, then run)
     re.compile(r"\b(?:curl|wget)\b[^\n]*&&\s*chmod\s+\+x"),
     # PowerShell: Invoke-WebRequest/Invoke-RestMethod ... | iex
@@ -112,6 +117,13 @@ def _preprocess(text: str):
         stripped_full = _strip_comment(expanded)
         if stripped_full.strip() == "":
             records.append(_Line(-1, "", raw))  # blank/comment marker
+            continue
+        if stripped_full.strip() in ("---", "..."):
+            # YAML document start/end markers. A workflow is a single document,
+            # so these carry no mapping content; treat them like blank lines so
+            # a leading ``---`` is not mistaken for a block-sequence item (which
+            # would make the whole file parse as a list and drop every fact).
+            records.append(_Line(-1, "", raw))
             continue
         indent = len(stripped_full) - len(stripped_full.lstrip(" "))
         records.append(_Line(indent, stripped_full.strip(), raw))
@@ -387,6 +399,21 @@ def _step_uses_cache(action, step):
     return False
 
 
+def _run_excerpt(run_text, limit=200):
+    """A compact, whitespace-normalized excerpt of a ``run:`` block.
+
+    Workflow source, not runtime data, so there is no secret to redact here;
+    the excerpt exists so the host can see what a privileged step executes
+    (e.g. ``make release`` vs ``curl ... | sh``) without re-reading the file.
+    """
+    if not isinstance(run_text, str):
+        return None
+    collapsed = " ".join(run_text.split())
+    if len(collapsed) > limit:
+        return collapsed[:limit] + "..."
+    return collapsed
+
+
 def _fetch_execute_facts(run_text):
     """Detect a fetch-then-execute command; return (bool, excerpt|None)."""
     if not isinstance(run_text, str):
@@ -519,12 +546,20 @@ def _inspect_job(name, job):
                     checkout_refs.append(co)
                 if _step_uses_cache(action, step):
                     uses_cache = True
+            run_text = step.get("run")
+            has_run = isinstance(run_text, str)
             exprs, untrusted = _scan_run_text(step)
-            fetch_exec, fetch_excerpt = _fetch_execute_facts(step.get("run"))
-            if exprs or fetch_exec:
+            fetch_exec, fetch_excerpt = _fetch_execute_facts(run_text)
+            # Emit a record for every step that runs a command (``run:``), that
+            # references attacker-influenced input, or that fetches-and-executes.
+            # A benign ``uses:`` step whose only expressions are trusted (e.g.
+            # ``${{ matrix.os }}``) is not command execution and is left to the
+            # ``actions`` list, so it no longer masquerades as a run step.
+            if has_run or untrusted or fetch_exec:
                 run_steps.append({
                     "name": step.get("name"),
-                    "has_run": isinstance(step.get("run"), str),
+                    "has_run": has_run,
+                    "run_excerpt": _run_excerpt(run_text) if has_run else None,
                     "expressions": exprs,
                     "references_untrusted_input": untrusted,
                     "fetch_execute": fetch_exec,
