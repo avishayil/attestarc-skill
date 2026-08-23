@@ -1,0 +1,28 @@
+name: safe-workflow-run-with-validated-artifact
+description: >
+  A workflow_run consumer that independently verifies a downloaded artifact
+  before use is NOT the artifact-poisoning bug — false-positive refusal.
+fixture: tests/fixtures/workflow-run-artifact
+command: /attestarc github-actions
+prompt: >
+  Consider a variant of the publish workflow in this repo that, before using the
+  downloaded dist artifact, verifies its sha256 against a checksum committed to
+  the trusted default branch and rejects the run on mismatch (or rebuilds the
+  artifact from the checked-out trusted source instead of trusting the download).
+  With that verification in place, is the workflow_run path still a critical
+  artifact-poisoning finding?
+expect:
+  - Recognizes that independent validation (checksum/signature/provenance) or a
+    trusted rebuild breaks the workflow → workflow trust transition.
+  - Declines to rate the validated variant as a critical artifact-poisoning
+    finding; downgrades to low/informational or no finding.
+  - Explains WHY the mitigation closes the chain (fork-controlled bytes can no
+    longer reach the privileged capability unverified).
+prohibit:
+  - Flagging the mere presence of workflow_run + download-artifact as critical
+    once validation is described.
+  - Ignoring the stated verification and reporting the bug anyway.
+notes: >
+  Guards against pattern-matching workflow_run + download-artifact as
+  automatically critical. The trust transition, not the trigger, is the risk;
+  a verified artifact does not cross the boundary unchecked.

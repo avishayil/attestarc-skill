@@ -335,3 +335,93 @@ def test_atomic_write_leaves_no_temp_files(tmp_path):
     leftovers = [n for n in os.listdir(os.path.dirname(path))
                  if n.endswith(".tmp")]
     assert leftovers == []
+
+
+# --------------------------------------------------------------------------- #
+# threat / trust_boundary / related_findings (attack-path reasoning fields)
+# --------------------------------------------------------------------------- #
+def _threat(**overrides):
+    t = {
+        "actor": "external-contributor",
+        "entrypoint": "pull_request_target",
+        "controlled_input": "pull-request source",
+        "trust_transition": "untrusted checkout executes in privileged job",
+        "capabilities": ["EXECUTE_UNTRUSTED_CODE", "REQUEST_WORKLOAD_IDENTITY"],
+        "target": "production AWS identity",
+        "reachability": "direct",
+        "preconditions": [],
+        "evidence_gaps": [],
+    }
+    t.update(overrides)
+    return t
+
+
+def test_upsert_preserves_threat_fields_on_create(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    f = sample_finding(
+        threat=_threat(),
+        trust_boundary="untrusted-contributor -> privileged-ci",
+        related_findings=["AA-GHA-ABCDEF"],
+    )
+    stored, created = state.upsert_finding(s, f)
+    assert created is True
+    assert stored["threat"]["actor"] == "external-contributor"
+    assert stored["threat"]["reachability"] == "direct"
+    assert stored["threat"]["capabilities"] == [
+        "EXECUTE_UNTRUSTED_CODE", "REQUEST_WORKLOAD_IDENTITY"]
+    assert stored["trust_boundary"] == "untrusted-contributor -> privileged-ci"
+    assert stored["related_findings"] == ["AA-GHA-ABCDEF"]
+
+    # Survives a save/load round trip and validates cleanly.
+    state.save_state(s, path)
+    reloaded = state.load_state(path)
+    assert validate_ok(reloaded)
+    again = state.find_by_id(reloaded, stored["id"])
+    assert again["threat"]["target"] == "production AWS identity"
+
+
+def test_upsert_refreshes_threat_on_update(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    state.upsert_finding(s, sample_finding(threat=_threat(reachability="direct")))
+
+    stored2, created = state.upsert_finding(
+        s, sample_finding(threat=_threat(reachability="conditional",
+                                         preconditions=["fork PR approved"])))
+    assert created is False
+    assert stored2["threat"]["reachability"] == "conditional"
+    assert stored2["threat"]["preconditions"] == ["fork PR approved"]
+    assert len(s["findings"]) == 1
+
+
+def test_upsert_rejects_secret_in_evidence_value(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    bad = sample_finding()
+    bad["evidence"] = [{
+        "type": "repository-file",
+        "source": "deploy.yml",
+        "key": "aws-access-key-id",
+        "value": "AKIAIOSFODNN7EXAMPLE",
+    }]
+    with pytest.raises(state.StateError):
+        state.upsert_finding(s, bad)
+
+
+def test_upsert_rejects_secret_in_threat(tmp_path):
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    bad = sample_finding(threat=_threat(target="leaked AKIAIOSFODNN7EXAMPLE"))
+    with pytest.raises(state.StateError):
+        state.upsert_finding(s, bad)
+
+
+def test_threat_may_reference_secret_name(tmp_path):
+    # Referencing a secret NAME (not its value) is fine.
+    path = init_state(tmp_path)
+    s = state.load_state(path)
+    ok = sample_finding(threat=_threat(target="production AWS_DEPLOY_KEY"))
+    stored, created = state.upsert_finding(s, ok)
+    assert created is True
+    assert stored["threat"]["target"] == "production AWS_DEPLOY_KEY"

@@ -41,6 +41,29 @@ git ls-remote https://github.com/docker/login-action v3      # or: gh api ...
 # uses: docker/login-action@<resolved-sha>  # v3.x.y
 ```
 
+Understand what pinning does and does not buy, so the fix is honest:
+
+- **It freezes the top-level ref, not transitive trust.** A pinned action still
+  runs whatever *its* own steps and nested `uses:` resolve to. Pin the action you
+  can, and prefer actions that are themselves pinned; a SHA does not make an
+  arbitrary third party trustworthy, only immutable.
+- **Review the commit you pin to.** Resolving `v3` to a SHA and pinning without
+  looking means pinning to whatever the tag points at *right now* — which could
+  already be malicious if the tag was moved. Look at the resolved commit before
+  committing to it.
+- **A pin is a point-in-time snapshot that now needs maintenance.** Freezing to a
+  SHA stops silent drift but also stops security updates. Pair pinning with
+  `package-ecosystem: github-actions` in `.github/dependabot.yml` so pins are
+  refreshed under review — pinning without an update path ages into stale,
+  vulnerable pins.
+- **Docker-based actions and images pin by digest, not tag.** For a
+  `docker://image:tag` step or a deployed image, the immutable form is
+  `image@sha256:…` (resolve with `docker buildx imagetools inspect` /
+  `gh api`/`crane digest`), keeping the tag in a comment.
+- **Reusable workflows pin the same way** (`owner/repo/.github/workflows/x.yml@<sha>`),
+  and while you are there, narrow a `secrets: inherit` call to the specific
+  secrets the workflow needs.
+
 ## Remote configuration remediations
 
 Branch protection, rulesets, org/repo Actions policy, environment protection,

@@ -149,3 +149,200 @@ def test_supply_chain_id_token_and_environment(fixtures_dir):
     assert wf["jobs"][0]["environment"] == "production"
     mutable = [a["name"] for a in wf["jobs"][0]["actions"] if a["pinned"] is False]
     assert "docker/login-action" in mutable
+
+
+# --------------------------------------------------------------------------- #
+# reusable-workflow calls: uses_pinned + secrets passing (inline YAML)
+# --------------------------------------------------------------------------- #
+_SHA = "1234567890abcdef1234567890abcdef12345678"  # 40 hex chars
+
+
+def test_job_uses_pinned_true_for_sha_ref():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  call:\n"
+        "    uses: org/repo/.github/workflows/x.yml@" + _SHA + "\n",
+        "caller.yml",
+    )
+    assert wf["parse_partial"] is False
+    job = wf["jobs"][0]
+    assert job["uses_pinned"] is True
+
+
+def test_job_uses_pinned_false_for_mutable_ref():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  call:\n"
+        "    uses: org/repo/.github/workflows/x.yml@main\n",
+        "caller.yml",
+    )
+    job = wf["jobs"][0]
+    assert job["uses_pinned"] is False
+
+
+def test_job_uses_pinned_none_when_no_job_level_uses():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo hi\n",
+        "ci.yml",
+    )
+    job = wf["jobs"][0]
+    assert job["uses_pinned"] is None
+
+
+def test_job_secrets_inherit():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  call:\n"
+        "    uses: org/repo/.github/workflows/x.yml@main\n"
+        "    secrets: inherit\n",
+        "caller.yml",
+    )
+    assert wf["jobs"][0]["secrets"] == "inherit"
+
+
+def test_job_secrets_explicit_mapping():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  call:\n"
+        "    uses: org/repo/.github/workflows/x.yml@main\n"
+        "    secrets:\n"
+        "      TOKEN: ${{ secrets.DEPLOY_TOKEN }}\n",
+        "caller.yml",
+    )
+    secrets = wf["jobs"][0]["secrets"]
+    assert isinstance(secrets, dict)
+    assert secrets["TOKEN"] == "${{ secrets.DEPLOY_TOKEN }}"
+
+
+def test_job_secrets_none_when_absent():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo hi\n",
+        "ci.yml",
+    )
+    assert wf["jobs"][0]["secrets"] is None
+
+
+# --------------------------------------------------------------------------- #
+# cache usage (presence fact)
+# --------------------------------------------------------------------------- #
+def test_uses_cache_true_for_actions_cache():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/cache@v4\n",
+        "ci.yml",
+    )
+    assert wf["jobs"][0]["uses_cache"] is True
+
+
+def test_uses_cache_true_for_setup_action_with_cache_input():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/setup-node@v4\n"
+        "        with:\n"
+        "          cache: npm\n",
+        "ci.yml",
+    )
+    assert wf["jobs"][0]["uses_cache"] is True
+
+
+def test_uses_cache_false_without_cache_action():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - run: make\n",
+        "ci.yml",
+    )
+    assert wf["jobs"][0]["uses_cache"] is False
+
+
+# --------------------------------------------------------------------------- #
+# fetch-then-execute run-step facts, and run_step recording policy
+# --------------------------------------------------------------------------- #
+def test_fetch_execute_curl_pipe_bash():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: curl -sSL https://example.com/install.sh | bash\n",
+        "ci.yml",
+    )
+    steps = wf["jobs"][0]["run_steps"]
+    assert len(steps) == 1
+    assert steps[0]["fetch_execute"] is True
+    assert steps[0]["fetch_execute_excerpt"]
+    assert "curl" in steps[0]["fetch_execute_excerpt"]
+
+
+def test_fetch_execute_wget_chmod():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: wget https://example.com/tool -O tool && chmod +x tool\n",
+        "ci.yml",
+    )
+    steps = wf["jobs"][0]["run_steps"]
+    assert len(steps) == 1
+    assert steps[0]["fetch_execute"] is True
+    assert "wget" in steps[0]["fetch_execute_excerpt"]
+
+
+def test_benign_run_without_expression_is_not_recorded():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo hello world\n",
+        "ci.yml",
+    )
+    # No ${{ }} expression and no fetch-execute -> the step is not recorded.
+    assert wf["jobs"][0]["run_steps"] == []
+
+
+def test_run_step_with_expression_recorded_without_fetch_execute():
+    wf = iw.inspect_workflow_text(
+        "on: push\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo ${{ github.sha }}\n",
+        "ci.yml",
+    )
+    steps = wf["jobs"][0]["run_steps"]
+    assert len(steps) == 1
+    assert steps[0]["fetch_execute"] is False
+    assert steps[0]["fetch_execute_excerpt"] is None
+    assert steps[0]["expressions"] == ["github.sha"]

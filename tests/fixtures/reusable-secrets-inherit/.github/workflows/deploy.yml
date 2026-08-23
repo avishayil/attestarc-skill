@@ -1,0 +1,12 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    # External reusable workflow, pinned to a MUTABLE branch ref (@main), and
+    # handed the caller's entire secret scope via `secrets: inherit`.
+    uses: some-org/ci/.github/workflows/deploy.yml@main
+    secrets: inherit

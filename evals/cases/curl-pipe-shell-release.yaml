@@ -1,0 +1,26 @@
+name: curl-pipe-shell-release
+description: >
+  A privileged release workflow pipes a network-fetched script straight into a
+  shell (curl … | bash) before publishing — download-and-execute inside a job
+  holding contents/id-token write.
+fixture: tests/fixtures/curl-pipe-release
+command: /attestarc github-actions
+prompt: >
+  Anything risky in how this repository builds and publishes its releases?
+expect:
+  - Detects the `curl -fsSL https://example.com/install.sh | bash` step in the
+    release job (a fetch-then-execute command).
+  - Notes that the job holds contents: write and id-token: write and runs in the
+    production environment on tag pushes — so the fetched code inherits
+    MUTATE_RELEASE and REQUEST_WORKLOAD_IDENTITY.
+  - Establishes the dependency → build transition: an external host (or a
+    MITM) chooses what code runs with release/identity capability.
+  - Recommends pinning the installer (vendored or checksum-verified) rather than
+    just adding TLS/`-f` flags.
+prohibit:
+  - Dismissing the step because it uses https or is "just installing tooling".
+  - Treating id-token: write as the finding on its own while missing that the
+    curl|bash step is what makes the capability attacker-reachable.
+notes: >
+  The privilege of the job is what turns a common curl|bash convenience into a
+  release-integrity risk. Rate by the reached asset (release + identity).

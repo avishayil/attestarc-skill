@@ -8,8 +8,10 @@ robust rather than complete -- on anything it cannot parse it degrades to
 never crash the host agent.
 
 It emits facts (triggers, permissions, runners, action references and their
-pin state, untrusted-context references), never security verdicts. The host
-agent, guided by references/github-actions.md, decides what the facts mean.
+pin state, untrusted-context references, reusable-workflow secret passing and
+pin state, cache usage, and fetch-then-execute command excerpts), never security
+verdicts. The host agent, guided by references/github-actions.md and
+references/threats/ci-cd-threats.md, decides what the facts mean.
 
 Usage::
 
@@ -56,6 +58,22 @@ _UNTRUSTED_REF_NEEDLES = (
     "github.event.pull_request.head.ref",
     "github.head_ref",
     "github.event.pull_request.merge_commit_sha",
+)
+
+# Fetch-then-execute one-liners: content pulled from the network and run. This
+# is a fact (the matched command line), not a verdict -- the host decides
+# whether it matters given the job's trigger and privilege.
+_FETCH_EXEC_PATTERNS = (
+    # curl/wget ... | sh|bash|zsh (optionally sudo, optional path prefix)
+    re.compile(r"\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?\S*sh\b"),
+    # curl/wget ... && chmod +x  (download, make executable, then run)
+    re.compile(r"\b(?:curl|wget)\b[^\n]*&&\s*chmod\s+\+x"),
+    # PowerShell: Invoke-WebRequest/Invoke-RestMethod ... | iex
+    re.compile(
+        r"\b(?:iwr|invoke-webrequest|irm|invoke-restmethod)\b[^\n]*\|\s*"
+        r"(?:iex|invoke-expression)",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -331,6 +349,46 @@ def _norm_permissions(value):
     return str(value)
 
 
+def _norm_job_secrets(value):
+    """Normalize a job-level ``secrets:`` (reusable-workflow call).
+
+    Returns ``"inherit"``, a ``{name: source}`` dict, or ``None``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value  # typically "inherit"
+    if isinstance(value, dict):
+        return {str(k): v for k, v in value.items()}
+    return str(value)
+
+
+def _step_uses_cache(action, step):
+    """True if the step reads/writes an Actions cache (a presence fact)."""
+    name = action["name"].lower()
+    if name.endswith("actions/cache") or "/cache" in name:
+        return True
+    # setup-* actions with a cache input (e.g. actions/setup-node with cache).
+    if "/setup-" in name:
+        with_ = step.get("with")
+        if isinstance(with_, dict) and any(
+            str(k) == "cache" or str(k).endswith("-cache") for k in with_
+        ):
+            return True
+    return False
+
+
+def _fetch_execute_facts(run_text):
+    """Detect a fetch-then-execute command; return (bool, excerpt|None)."""
+    if not isinstance(run_text, str):
+        return False, None
+    for line in run_text.splitlines():
+        for pat in _FETCH_EXEC_PATTERNS:
+            if pat.search(line):
+                return True, line.strip()[:200]
+    return False, None
+
+
 def _classify_action(uses: str):
     uses = uses.strip()
     kind = "external"
@@ -408,6 +466,7 @@ def _inspect_job(name, job):
         self_hosted = any("self-hosted" in str(x) for x in runs_on)
 
     actions, run_steps, checkout_refs = [], [], []
+    uses_cache = False
     steps = job.get("steps")
     if isinstance(steps, list):
         for step in steps:
@@ -420,14 +479,24 @@ def _inspect_job(name, job):
                 co = _checkout_ref_facts(step, action)
                 if co:
                     checkout_refs.append(co)
+                if _step_uses_cache(action, step):
+                    uses_cache = True
             exprs, untrusted = _scan_run_text(step)
-            if exprs:
+            fetch_exec, fetch_excerpt = _fetch_execute_facts(step.get("run"))
+            if exprs or fetch_exec:
                 run_steps.append({
                     "name": step.get("name"),
                     "has_run": isinstance(step.get("run"), str),
                     "expressions": exprs,
                     "references_untrusted_input": untrusted,
+                    "fetch_execute": fetch_exec,
+                    "fetch_execute_excerpt": fetch_excerpt,
                 })
+
+    job_uses = job.get("uses")  # reusable workflow at job level
+    uses_pinned = None
+    if isinstance(job_uses, str):
+        uses_pinned = _classify_action(job_uses)["pinned"]
 
     return {
         "name": job.get("name", name),
@@ -436,7 +505,10 @@ def _inspect_job(name, job):
         "self_hosted": self_hosted,
         "environment": job.get("environment"),
         "permissions": _norm_permissions(job.get("permissions")),
-        "uses": job.get("uses"),  # reusable workflow at job level
+        "uses": job_uses,
+        "uses_pinned": uses_pinned,
+        "secrets": _norm_job_secrets(job.get("secrets")),
+        "uses_cache": uses_cache,
         "actions": actions,
         "run_steps": run_steps,
         "checkout_refs": checkout_refs,

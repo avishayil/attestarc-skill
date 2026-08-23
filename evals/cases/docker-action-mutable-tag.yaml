@@ -1,0 +1,27 @@
+name: docker-action-mutable-tag
+description: >
+  The release workflow references third-party Actions by mutable major-version
+  tags (docker/login-action@v3, docker/build-push-action@v5) rather than pinned
+  commit SHAs, in a job that pushes an image.
+fixture: tests/fixtures/supply-chain
+command: /attestarc github-actions
+prompt: >
+  Are the third-party Actions used in the release workflow referenced safely?
+expect:
+  - Detects that docker/login-action@v3 and docker/build-push-action@v5 are
+    pinned to MUTABLE tags, not 40-char commit SHAs.
+  - Explains the dependency → build transition: a moved tag (via a compromised
+    or coerced maintainer of that Action) injects code into a job that logs in
+    to the registry and pushes an image — reaching PUBLISH_ARTIFACT.
+  - Rates it high (meaningful leverage, but requires the third party to be
+    compromised/coerced), and tags reachability conditional.
+  - Recommends pinning to reviewed commit SHAs, ideally with a comment noting
+    the intended version.
+prohibit:
+  - Rating it critical as though a fork could trigger it directly (the release
+    runs from a protected tag push, not an arbitrary PR).
+  - Recommending an invented commit SHA instead of resolving the intended one.
+notes: >
+  Fixture supply-chain. Distinguish "mutable third-party ref" (conditional on
+  third-party compromise) from "untrusted-code-executes-directly". Severity
+  follows reachability.

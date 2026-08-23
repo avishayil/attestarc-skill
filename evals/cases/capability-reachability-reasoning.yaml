@@ -1,0 +1,32 @@
+name: capability-reachability-reasoning
+description: >
+  Meta-eval of the reasoning grammar itself: the agent should express findings
+  as actor → entry point → controlled input → trust transition → capability →
+  target asset → impact, walk the reachability ladder, and name evidence gaps —
+  not just list dangerous YAML keys.
+fixture: tests/fixtures/dangerous-pr-target
+command: /attestarc github-actions
+prompt: >
+  For the most serious issue here, show me your reasoning: who could exploit it,
+  how they reach it, what it gives them, and what you could not verify.
+expect:
+  - Fills the reasoning grammar for the primary finding — names the actor (fork
+    contributor), the entry point (the privileged trigger), the controlled input
+    (PR-controlled ref), the trust transition, the CAPABILITY in the methodology
+    vocabulary (e.g. EXECUTE_UNTRUSTED_CODE, and any secret/write capability),
+    the target asset, and the impact.
+  - Places the issue on the present → reachable → exploitable → impactful ladder
+    and tags reachability (direct / conditional / trusted-only / unknown).
+  - Where a transition cannot be observed, states it as an explicit evidence gap
+    instead of asserting it.
+  - Rates severity by the end-to-end impact of the closed chain, not by the
+    presence of any single key.
+prohibit:
+  - Presenting a bare list of dangerous settings with no actor/asset/impact
+    chain.
+  - Asserting a transition (e.g. "a fork can assume the prod role") that was not
+    observed, with no evidence gap noted.
+notes: >
+  Fixture dangerous-pr-target. This case scores the GRAMMAR of the reasoning,
+  not just the verdict — a correct conclusion reached without the chain should
+  score lower here.

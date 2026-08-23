@@ -6,6 +6,20 @@ altered? Reason from observable repository/CI evidence; V1 needs no native
 registry integrations. Standards like SLSA and OpenSSF may inform your thinking
 internally, but never lead the user experience with framework scores.
 
+Threat model: see `references/threats/supply-chain.md` for the `CI → artifact`
+boundary and why *generated ≠ verified*. This file teaches how to observe the
+release path in this repository.
+
+**Generated is not verified.** The recurring trap in this domain is treating the
+*production* of a security artifact as if it were the *enforcement* of it. An SBOM
+that is generated but never diffed or gated, provenance that is emitted but never
+checked at deploy, a signature created but never validated at pull/deploy — each
+provides assurance only at the step that *consumes and enforces* it. For every
+control below, separate two questions: is it **generated/present**, and is it
+**verified/enforced** (and where — in-repo, or in a deploy system you cannot
+see)? Rate present-but-unenforced as hardening, and record the enforcement point
+you could not observe as an `evidence_gap` / `needs_review`.
+
 ## What to inspect
 
 - **Build provenance / who builds releases**: are release artifacts built by CI
@@ -18,13 +32,19 @@ internally, but never lead the user experience with framework scores.
   referenced by **immutable digest** (`image@sha256:...`) or by mutable tag
   (`:latest`, `:v1`)? Mutable tags mean the running artifact can change without
   a source change — the same class of risk as unpinned Actions.
-- **Signing & verification**: are artifacts/images signed (e.g. Sigstore/cosign,
-  GPG) and is the signature actually **verified** at deploy/pull time? Signing
-  without verification provides little assurance.
-- **Provenance / SBOM**: is build provenance (e.g. GitHub artifact attestations,
-  SLSA provenance) generated, and is an SBOM produced and retained? Note absence
-  where the delivery path warrants it — but rate it as hardening, not a
-  standalone crisis.
+- **Signing & verification** (generated vs verified): are artifacts/images signed
+  (e.g. Sigstore/cosign, GPG)? That is generation. The security comes from the
+  signature being **verified** at pull/deploy time against an expected identity
+  (`cosign verify --certificate-identity …`), not merely produced. A signing step
+  with no corresponding verification step provides little assurance — say which
+  you observed.
+- **Provenance / SBOM** (generated vs verified): is build provenance (GitHub
+  artifact attestations, SLSA provenance) generated, and an SBOM produced and
+  retained? Then ask the harder question: is the provenance **verified** before
+  deploy (`gh attestation verify`, policy admission) and is the SBOM actually
+  *used* (diffed, policy-gated) rather than archived? Note absence where the
+  delivery path warrants it, and note present-but-unverified as hardening — not a
+  standalone crisis, and not a solved problem.
 - **Release tags**: are release tags protected from being moved or deleted
   (see `references/github.md`)? A movable release tag undermines everything
   downstream that trusts it.
@@ -39,7 +59,9 @@ scattering them.
 ## Recording
 
 `domain: supply-chain`; categories such as `mutable-image-reference`,
-`unsigned-artifacts`, `no-provenance`, `release-not-ci-controlled`,
-`unprotected-release-tags`. Where the decisive evidence lives outside the repo
+`unsigned-artifacts`, `signing-without-verification`, `no-provenance`,
+`provenance-not-verified`, `sbom-generated-not-enforced`,
+`release-not-ci-controlled`, `unprotected-release-tags`. Where the decisive
+evidence lives outside the repo
 (registry settings, deploy-time verification), state what additional evidence is
 required and consider `needs_review`.

@@ -1,0 +1,32 @@
+name: Publish
+
+# Privileged. Triggered by the completion of "PR Build" (which runs on
+# untrusted fork PRs), it downloads that run's artifact and executes/publishes
+# it while holding id-token: write and packages: write. The artifact was
+# produced from fork-controlled code and is consumed without any independent
+# validation — a workflow_run artifact-poisoning bridge.
+on:
+  workflow_run:
+    workflows: ["PR Build"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Download artifact from the triggering run
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the downloaded build
+        run: |
+          ./dist/publish.sh

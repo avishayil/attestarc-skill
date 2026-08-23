@@ -104,11 +104,71 @@
           "items": { "$ref": "#/definitions/evidence" }
         },
         "impact": { "type": "string" },
+        "threat": { "$ref": "#/definitions/threat" },
+        "trust_boundary": {
+          "type": "string",
+          "description": "The boundary the finding crosses, e.g. 'untrusted-contributor -> privileged-ci'. Optional."
+        },
+        "related_findings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^AA-[A-Z]{2,4}-[0-9A-F]{6}$"
+          },
+          "description": "Ids of findings that form part of the same attack path. Optional."
+        },
         "remediation": { "$ref": "#/definitions/remediation" },
         "verification": { "$ref": "#/definitions/verification" },
         "accepted_by": { "type": "string" },
         "reason": { "type": "string" },
         "accepted_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "threat": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional attack-path reasoning: how an actor reaches a capability that affects an asset. Free-form to keep the reasoning grammar flexible; see references/methodology.md for the vocabulary. MUST NOT contain secret values.",
+      "properties": {
+        "actor": {
+          "type": "string",
+          "description": "Who initiates, e.g. external-contributor, dependency, developer, bot, compromised-maintainer, workflow"
+        },
+        "entrypoint": {
+          "type": "string",
+          "description": "The entry point the actor uses, e.g. pull_request_target, workflow_run, a protected ref"
+        },
+        "controlled_input": {
+          "type": "string",
+          "description": "The attacker-controllable input, e.g. pull-request source, a consumed artifact"
+        },
+        "trust_transition": {
+          "type": "string",
+          "description": "Where less-trusted input reaches more-trusted execution"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Capabilities gained, from the methodology vocabulary, e.g. EXECUTE_UNTRUSTED_CODE, REQUEST_WORKLOAD_IDENTITY, PUBLISH_ARTIFACT"
+        },
+        "target": {
+          "type": "string",
+          "description": "The valuable asset affected, e.g. production AWS identity, released artifact, protected source"
+        },
+        "reachability": {
+          "type": "string",
+          "enum": ["direct", "conditional", "trusted-only", "unknown"],
+          "description": "How reachable the weakness is by the actor"
+        },
+        "preconditions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Conditions required for the path to be exploitable"
+        },
+        "evidence_gaps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Unverified transitions and the evidence that would resolve them; expected on needs_review findings"
+        }
       }
     },
     "evidence": {
@@ -129,9 +189,17 @@
             "column": { "type": "integer" }
           }
         },
+        "key": {
+          "type": "string",
+          "description": "Preferred: the specific fact key observed, e.g. 'id-token' or 'permissions'. Small structured facts are safer than raw output blobs."
+        },
+        "value": {
+          "type": "string",
+          "description": "Preferred: the value of that fact, e.g. 'write'. MUST NOT contain secret values."
+        },
         "observed": {
           "type": "string",
-          "description": "The observed value or condition. MUST NOT contain secret values."
+          "description": "The observed value or condition when a single structured key/value does not fit. Prefer small sanitized facts over raw command output (raw logs can carry credentials, PII, injected instructions, or terminal escape sequences). MUST NOT contain secret values."
         }
       }
     },

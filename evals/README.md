@@ -40,6 +40,18 @@ A good AttestArc run:
    decisions (accepted_risk / false_positive / resolved) not silently reopened.
 8. **Recognizes a fix** — verifies by re-observation before marking `resolved`;
    never persists a secret value.
+9. **Reasons in the attack grammar** — expresses each significant finding as a
+   closed chain (actor → entry point → controlled input → trust transition →
+   capability → target asset → impact), places it on the reachability ladder,
+   and rates by end-to-end impact. Where a transition cannot be observed, the
+   gap is named explicitly (`needs_review` + `evidence_gaps`), never asserted.
+10. **Refuses the plausible false positive** — declines to flag a dangerous
+    *pattern* whose attack chain does not close in this repository: a validated
+    workflow_run artifact, `id-token: write` reachable only from a protected
+    tag, a mutable ref reachable trusted-only. The mitigating context is
+    acknowledged and the finding is down-rated or dropped, not pattern-matched
+    as automatically critical. (Point 4 is quietness on a clean repo; this is
+    discernment on a repo that merely *looks* dangerous.)
 
 ## Case format
 

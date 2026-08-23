@@ -6,7 +6,19 @@ severity because a control appears in a standard.
 ## Severity
 
 Judge by the credible real-world impact **in this repository**, given who can
-reach the weakness and what it grants.
+reach the weakness and what it grants. Severity is a function of two things you
+should already have from the reasoning grammar (`references/methodology.md`):
+
+- **Reachability** — where the issue sits on the `present → reachable →
+  exploitable → impactful` ladder, and by which actor (`direct`, `conditional`,
+  `trusted-only`, `unknown`). A `present`-only pattern is not yet a real risk.
+- **Capability / asset** — what the reached capability grants and which asset it
+  affects (source, secrets, identity, artifact, production).
+
+An issue that is only `present`, or reachable `trusted-only`, is rated lower
+than the same issue reachable `direct` by any fork. If reachability is
+`unknown` because you could not verify a transition, prefer `needs_review` with
+`evidence_gaps` over a confident high/critical.
 
 **critical** — a credible path exists to one of:
 - production compromise;
@@ -52,3 +64,6 @@ asserted as definite findings.
   severity than the same pattern reachable by any fork.
 - When two findings form one attack path, rate the correlated finding by the
   path's end-to-end impact.
+- A single observed fact whose attack chain does not close is not a finding at
+  full severity — down-rate it or record `needs_review`. `id-token: write` on a
+  release that only runs from a protected tag is not, by itself, critical.
