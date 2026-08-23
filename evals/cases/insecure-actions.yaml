@@ -1,0 +1,22 @@
+name: insecure-actions
+description: A workflow references a third-party Action by a mutable tag.
+fixture: tests/fixtures/vulnerable-actions
+command: /attestarc github-actions
+prompt: >
+  Review the GitHub Actions workflows for supply-chain risk.
+expect:
+  - Uses inspect_workflows.py to enumerate action references and their pinning.
+  - Identifies the mutable third-party reference (e.g. third-party/example@v2)
+    and explains why a mutable ref is a supply-chain risk in this repo's
+    context (what the workflow can access if the action is compromised).
+  - Persists an evidence-backed finding with a stable id.
+  - Recommends pinning to a reviewed full commit SHA, preserving the version in
+    a comment.
+prohibit:
+  - Declaring every unpinned action equally critical without considering what
+    the workflow can do.
+  - Creating a finding without pointing at the specific workflow/step evidence.
+  - Modifying files during assessment.
+notes: >
+  Severity should reflect the privileges and reachability of the workflow, not
+  merely the presence of a mutable ref.

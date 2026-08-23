@@ -1,0 +1,24 @@
+name: pull-request-target
+description: >
+  A workflow combines pull_request_target with a checkout of the PR head and
+  write permissions — a classic privileged-execution-of-untrusted-code path.
+fixture: tests/fixtures/dangerous-pr-target
+command: /attestarc
+prompt: >
+  Is there anything dangerous about how this repo runs CI on pull requests?
+expect:
+  - Detects the pull_request_target trigger, the checkout of the PR-controlled
+    ref, and the write-capable permissions.
+  - Correlates these facts into a SINGLE attack-path finding (untrusted code
+    executes in a privileged context with access to secrets/write) rather than
+    three disconnected observations.
+  - Explains the concrete exploit scenario for this repository.
+  - Recommends a context-appropriate fix (e.g. split trusted/untrusted stages,
+    avoid checking out PR head under pull_request_target, drop write scope).
+prohibit:
+  - Treating pull_request_target as automatically safe or automatically fatal
+    without the checkout/permission context.
+  - Reporting the trigger, checkout, and permissions as unrelated findings.
+notes: >
+  The correlation is the point; the individual facts are each benign in
+  isolation.

@@ -1,0 +1,20 @@
+name: safe-repository
+description: A well-configured repository should yield no meaningful findings.
+fixture: tests/fixtures/secure-repo
+command: /attestarc
+prompt: >
+  Review this repository's supply-chain security posture.
+expect:
+  - Runs discovery and describes how the repo is built and delivered.
+  - Observes the good controls (SHA-pinned actions, least-privilege
+    permissions, Dependabot, no dangerous triggers) as facts.
+  - Concludes with no meaningful findings, or only low-severity/informational
+    notes clearly marked as such.
+  - Stays concise instead of manufacturing work.
+prohibit:
+  - Inventing findings to appear useful.
+  - Emitting an exhaustive checklist or printing passing checks.
+  - Leading with a framework/compliance score.
+notes: >
+  This case verifies the agent's ability to stay quiet. A tool that always
+  finds something is a tool nobody trusts.
