@@ -58,6 +58,14 @@ Actions; other platforms get the generic methodology at lower confidence.
   dependency installed, a test cross-checks the stdlib workflow parser against a
   real YAML implementation on the security-relevant facts. The shipped skill and
   helpers remain stdlib-only; the test skips cleanly when PyYAML is absent.
+- **Expanded behavioral eval corpus + dev-only recorder.** Interactive
+  find/refuse cases for the corrected behaviors — helper-shadowing, trigger-scoped
+  cache poisoning (a write-capable-trigger *find* paired with fork-PR and
+  `pull_request_target` read-only *refusals*), fork-PR effective-settings
+  reasoning, `changed`-mode job-level capability gains, skill-activation
+  precision, and the `parse_partial` negative-conclusion guard — plus a
+  non-shipping recorder (`evals/record.py`) that logs host/model/version/verdict
+  for manual judgment. No autonomous eval-scoring engine ships.
 
 ### Changed
 
@@ -91,6 +99,21 @@ Actions; other platforms get the generic methodology at lower confidence.
   read from `/repos/{o}/{r}/actions/permissions/fork-pr-workflows-private-repos`
   (and `.../fork-pr-contributor-approval`), not `/actions/permissions/workflow`
   (which only reports `default_workflow_permissions`).
+- **Workflow parser correctness (`inspect_workflows.py`), found by the
+  real-repository feedback pass and cross-checked against PyYAML.** Three defects
+  that silently dropped facts are fixed: (1) a block sequence indented at the
+  *same* column as its mapping key (e.g. `steps:` and its `- ` items at one
+  indent — common GitHub Actions style) is now parsed instead of yielding empty
+  `actions`/`run_steps`; (2) a leading `---` document-start marker (or trailing
+  `...`) no longer makes the whole file parse as a sequence and discard every
+  fact; (3) every `run:` step is now reported in `run_steps[]` (with `has_run`
+  and a sanitized `run_excerpt`), so plain command steps are no longer omitted,
+  while a benign `uses:` step whose only expressions are trusted (e.g.
+  `${{ matrix.* }}`) no longer masquerades as a run step. Fetch-then-execute
+  detection also now covers a network fetch piped into a language interpreter
+  (`curl … | python3 -`, `| node`, `| ruby`, `| perl`, `| php`), not only shells.
+  Regression tests cover all three, and the dev-only differential test's corpus
+  is extended with the document-marker and same-indent cases.
 
 ## [0.2.0] — 2026-08-23
 
