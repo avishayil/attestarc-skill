@@ -1,12 +1,15 @@
 # AttestArc Specification
 
-- **Status:** Draft — normative for V1 (0.4.x)
+- **Status:** Draft — normative for the self-evolving architecture (0.5.x)
 - **Artifact version tracked:** `SKILL.md` frontmatter `metadata.version`
+- **Companion document:** `THREAT_MODEL.md` governs the security of AttestArc
+  *itself* (kernel, knowledge plane, evolution pipeline). §20–§24 below are the
+  behavioral/contract counterpart to that threat model.
 - **Audience:** Contributors to `attestarc-skill`. This document is the
   authoritative reference for behavior and architecture. It MUST be kept in
   sync with the implementation: any change to observable behavior, the findings
-  schema, script contracts, or scope requires a corresponding change here in the
-  same change set.
+  or knowledge schemas, script contracts, trust boundaries, or scope requires a
+  corresponding change here in the same change set.
 
 ## 1. Terminology
 
@@ -55,7 +58,10 @@ inspect, what matters, how to persist findings, and how to remediate safely.
 
 AttestArc is a Skill, not a standalone application. It MUST NOT contain or
 require its own LLM runtime, agent framework, server, database, dashboard, or
-report generator. See §16 (Non-goals) and §17 (Architectural constraint).
+report generator. Its three principals — **Assessor**, **Updater**, and
+**Evolver** (§22) — are skill modes and a development workflow, NOT a hosted
+multi-agent runtime; the Host provides all orchestration. See §16 (Non-goals),
+§17 (Architectural constraint), and §20–§24 (self-evolving architecture).
 
 ### 2.5 Architectural layers
 
@@ -66,6 +72,16 @@ normative:
   achieve, the sequence it follows, when it asks the user, when it reads a
   reference, when it runs a Helper, and how it decides what to recommend. This
   is where the intelligence of the Skill lives.
+- `core/` — the **kernel**: durable, cross-cutting reasoning that changes slowly
+  and is always loaded (`methodology.md`, `capabilities.md`, `severity.md`,
+  `evidence.md`, `agent-safety.md`, `remediation.md`, `promotion-policy.md`). The
+  kernel is trusted and MUST NOT be modified by the running skill during an
+  assessment; it changes only through reviewed pull requests (§21, §22).
+- `knowledge/` — the **verified-knowledge plane**: volatile platform facts
+  (version-specific defaults, API response semantics, dated guidance) shipped as
+  signed, versioned, temporal, provenance-backed JSONL packs plus TUF-inspired
+  metadata (§23). Trusted for reasoning only after verification; the Assessor
+  reads it read-only and never over the network.
 - `references/` — **expertise**: durable domain knowledge that teaches the Host
   how to *investigate* a domain (objectives, what to inspect, how to reason
   about exploitability and false positives). References SHALL teach
@@ -80,12 +96,17 @@ normative:
     remediation** — which facts to gather, how to query them, how to fix them.
     A domain file SHALL cross-reference the relevant `threats/` file rather than
     restate the attack model, so the two layers do not duplicate each other.
-  - `references/methodology.md` (the reasoning grammar, §8.1) and
-    `references/agent-safety.md` (the tool-use trust policy, §13.4) are
-    cross-cutting and apply to every domain.
+    Domain files hold **durable** observation/remediation methodology; **volatile**
+    platform facts SHALL live in `knowledge/` and be cross-referenced by entry id
+    (§23), the same deferral pattern used for `threats/`.
+  - `core/methodology.md` (the reasoning grammar, §8.1) and
+    `core/agent-safety.md` (the tool-use trust policy, §13.4) are cross-cutting
+    kernel files that apply to every domain and are always loaded.
 - `scripts/` — **deterministic facts**: primitives that produce structured
-  observations. See §12.
-- `assets/` — **contracts**: machine-readable resources (the findings schema).
+  observations, including the knowledge helpers `knowledge.py` (lookup/status/
+  explain) and `knowledge_verify.py` (TUF-inspired verification). See §12, §23.
+- `schemas/` — **contracts**: machine-readable resources (the findings schema and
+  the knowledge/manifest/learning-candidate schemas).
 - The Host LLM — **judgment**: deciding what the facts mean.
 
 The layer test: *"Would the Skill want the LLM to improvise this on every
@@ -109,29 +130,41 @@ Two boundaries are load-bearing and MUST hold:
 ## 3. Repository layout
 
 **The repository root is the Skill package.** `SKILL.md` and the
-`references/`, `scripts/`, and `assets/` directories live at the root; the
+`core/`, `references/`, `knowledge/`, `scripts/`, and `schemas/` directories live at the root; the
 repository is not a project that merely contains a Skill in a subdirectory. The
 development repository SHALL use:
 
 ```
 attestarc-skill/
 ├── SKILL.md                  # reasoning layer; frontmatter carries the version
-├── references/               # methodology, agent-safety, severity, github,
+├── core/                     # KERNEL: methodology, capabilities, severity,
+│                             # evidence, agent-safety, remediation,
+│                             # promotion-policy (always loaded; PR+eval gated)
+├── references/               # domain observation+remediation: github,
 │                             # github-actions, dependencies, secrets-identity,
-│                             # supply-chain, remediation
+│                             # supply-chain
 │   └── threats/              # ci-cd-threats, source-integrity, identity,
 │                             # supply-chain (portable attack-class catalog)
-├── scripts/                  # state.py, discover_repo.py,
-│                             # inspect_workflows.py, inspect_git_diff.py
-├── assets/findings.schema.json
+├── knowledge/                # VERIFIED KNOWLEDGE plane (§23)
+│   ├── sources.yaml          #   authoritative source registry + authority tiers
+│   ├── root.json ...         #   TUF-inspired metadata (root/timestamp/snapshot/targets)
+│   └── bootstrap/*.jsonl     #   last-known-good packs shipped in the payload
+├── scripts/                  # state.py, discover_repo.py, inspect_workflows.py,
+│                             # inspect_git_diff.py, knowledge.py,
+│                             # knowledge_verify.py, knowledge_compile.py
+├── schemas/                  # findings.schema.json, knowledge.schema.json,
+│                             # knowledge-manifest.schema.json,
+│                             # learning-candidate.schema.json
 ├── README.md
 ├── LICENSE
 ├── CHANGELOG.md
 ├── SPECIFICATION.md          # this document
+├── THREAT_MODEL.md           # AttestArc's own supply-chain threat model
 ├── CLAUDE.md
 ├── pyproject.toml
 ├── install.py
 ├── uninstall.py
+├── evolution/                # DEV scaffolding for the Evolver (§24); NOT shipped
 ├── evals/                    # agent behavioral evaluations (§14)
 │   ├── README.md
 │   └── cases/*.yaml
@@ -140,11 +173,13 @@ attestarc-skill/
     └── fixtures/
 ```
 
-The installed **Skill payload** SHALL be exactly: `SKILL.md`, `references/`,
-`scripts/`, `assets/`, and the OPTIONAL `LICENSE`/`README.md`. Development
-scaffolding — `tests/`, `evals/`, `install.py`, `uninstall.py`, `pyproject.toml`,
-`CLAUDE.md`, `SPECIFICATION.md`, `CHANGELOG.md` — MUST NOT be copied into a host's
-skills directory.
+The installed **Skill payload** SHALL be exactly: `SKILL.md`, `core/`,
+`references/`, `knowledge/`, `scripts/`, `schemas/`, and the OPTIONAL
+`LICENSE`/`README.md`. Development scaffolding — `tests/`, `evals/`, `evolution/`,
+`install.py`, `uninstall.py`, `pyproject.toml`, `CLAUDE.md`, `SPECIFICATION.md`,
+`THREAT_MODEL.md`, `CHANGELOG.md` — MUST NOT be copied into a host's skills
+directory. `knowledge_compile.py` is an Updater dev-tool and MAY be shipped, but
+the Updater mode it powers is a distinct principal (§22).
 
 ## 4. Host environments and installation
 
@@ -218,9 +253,9 @@ conversationally; the state file maintains continuity.
 
 ### 6.2 Schema
 
-The canonical schema is `assets/findings.schema.json`
+The canonical schema is `schemas/findings.schema.json`
 (JSON Schema draft-07). The top-level object SHALL contain `schema_version`
-(integer, currently `3`), `repository` (`root`, and OPTIONAL `scm`/`remote`),
+(integer, currently `4`), `repository` (`root`, and OPTIONAL `scm`/`remote`),
 `created_at`, `updated_at`, and `findings` (array), and MAY contain an OPTIONAL
 `assessor_safety_events` array (§6.7). Stable objects (the top-level object, each
 `finding`, `threat`, `evidence` item, `remediation`, `verification`,
@@ -238,7 +273,11 @@ A finding SHALL contain at minimum: `id`, `fingerprint`, `domain`, `category`,
 a hardening gap; orthogonal to the fingerprint), and the provenance fields
 `observed_at`, `source_revision`, `last_verified_at`, `assessment_version` — which
 the Host SHALL populate (`state.py` stamps `observed_at`/`source_revision`/
-`assessment_version` on upsert and `last_verified_at` on resolve). When `status`
+`assessment_version` on upsert and `last_verified_at` on resolve). A finding
+derived from a knowledge entry SHALL additionally carry `knowledge_dependencies`
+(§23.4): an array of `{id, version | content_hash}` recording which verified
+knowledge the conclusion rests on, so the finding can be re-verified when that
+knowledge changes. When `status`
 is `accepted_risk`, the finding SHALL carry a `risk_acceptance` object
 (`accepted_by`, `reason`, `accepted_at`, and an OPTIONAL `expires_at` after which
 the acceptance has lapsed and the finding SHOULD be re-reviewed). When
@@ -303,7 +342,10 @@ fingerprint changed persisted identifiers, hence the `schema_version` bump from
 does NOT change identifiers: it adds the `type` taxonomy, replaces the flat
 `accepted_by`/`reason`/`accepted_at` fields with the `risk_acceptance` object
 (with `expires_at`), types `related_findings`, populates provenance, and adds the
-top-level `assessor_safety_events` array (§6.7).
+top-level `assessor_safety_events` array (§6.7). `schema_version` `4` (v0.5.0) is a
+purely additive bump that likewise does NOT change identifiers: it adds the
+OPTIONAL `knowledge_dependencies` array to a finding (§23.4). `requires_reverification`
+(§23.4) is a read-time computed view, NOT a stored field or a new `status` value.
 
 ### 6.4 Finding states
 
@@ -511,8 +553,9 @@ code.
 ### 12.1 `state.py`
 
 The most important Helper. It SHALL provide `init`, `list`, `get`, `upsert`,
-`set-status`, `resolve`, `record-safety-event`, and `validate`, operating on a
-`--file` (default `.attestarc/findings.json`) within a `--root`. Requirements:
+`set-status`, `resolve`, `record-safety-event`, `reverify`, and `validate`,
+operating on a `--file` (default `.attestarc/findings.json`) within a `--root`.
+Requirements:
 
 - Schema-consistent validation (hand-rolled; no `jsonschema` dependency).
 - Atomic writes (temporary file plus rename) and deterministic formatting
@@ -542,16 +585,23 @@ The most important Helper. It SHALL provide `init`, `list`, `get`, `upsert`,
 - `record-safety-event` SHALL accept its event payload as JSON on stdin (the `-`
   source), compute `content_hash` by default, and persist a raw `excerpt` only
   when explicitly supplied (§6.7).
-- **Schema migration.** On load, a state file with `schema_version < 3` SHALL be
+- **Schema migration.** On load, a state file with `schema_version < 4` SHALL be
   migrated in memory to the current schema (flat `accepted_by`/`reason`/
   `accepted_at` → `risk_acceptance`; untyped `related_findings: [str]` →
   `[{id, relationship: "contributes_to"}]`; stamp `schema_version` and absent
-  `assessment_version`). Migration SHALL be idempotent and leave ids/fingerprints
-  unchanged, and SHALL persist only on the next mutating save so read-only
-  commands stay read-only.
+  `assessment_version`). The v3→v4 step is a pure `schema_version` restamp — no
+  field is added or rewritten. Migration SHALL be idempotent and leave
+  ids/fingerprints unchanged, and SHALL persist only on the next mutating save so
+  read-only commands stay read-only.
 - **Expiry.** An `accepted_risk` finding whose `risk_acceptance.expires_at` has
   passed SHALL surface an `effective_status` of `open` in `list`/`get` while the
   stored `status` is left untouched (§6.2).
+- **Knowledge dependencies & re-verification.** `upsert` SHALL preserve and refresh
+  a finding's `knowledge_dependencies` (§23.4). Given a set of changed knowledge
+  ids/versions (supplied on stdin), `reverify` SHALL list the findings whose
+  recorded dependencies no longer match and, in `list`/`get`, surface a read-time
+  `requires_reverification: true` view — WITHOUT mutating the stored `status`. A
+  knowledge change MUST NEVER auto-resolve or auto-reopen a finding.
 
 ### 12.2 `discover_repo.py`
 
@@ -788,6 +838,18 @@ secret scanner, malware scanner, or container CVE scanner; where such tools are
 available their output MAY be used as supporting evidence. Helper scripts remain
 deterministic primitives (§2.6) and MUST NOT accrete assessment logic.
 
+The self-evolving architecture (§20–§24) does not relax these non-goals. In
+particular: the Assessor/Updater/Evolver principals are **skill modes and a
+development workflow**, NOT a multi-agent runtime or agent framework — the Host
+orchestrates. Knowledge refresh and compilation are on-demand helper/mode
+operations, NOT background monitoring or a hosted update service. Auto-generated
+evals (§24) remain **structured specs run interactively**; no eval-runner engine
+is introduced. The knowledge helpers `knowledge.py`/`knowledge_verify.py` emit
+facts and verification results, NOT verdicts, and MUST NOT accrete assessment
+logic. Cryptographic verification shells out to a system tool (`ssh-keygen -Y
+verify`); AttestArc MUST NOT bundle a crypto library or third-party runtime
+dependency.
+
 ## 17. Architectural constraint (north star)
 
 Whenever implementation grows, contributors SHALL ask whether the addition must
@@ -796,11 +858,18 @@ security product. If the latter, it MUST be simplified. The ideal V1 is
 deliberately small: security methodology + references + a few deterministic
 Helpers + a persistent findings file + the Host the engineer already uses.
 
-The guiding boundary is: `scripts = facts`, `references = expertise`,
+The guiding boundary is: `scripts = facts`, `core = kernel expertise`,
+`references = domain expertise`, `knowledge = verified volatile facts`,
 `SKILL.md = reasoning`, `LLM = judgment`. The litmus for any new deterministic
 code is: *"Would the Skill want the LLM to improvise this on every invocation?"*
 If yes, it belongs to the Host, not a script. **The Agent Skill is the
 application**; Claude Code and Cursor provide the agent runtime.
+
+A second litmus governs the self-evolving machinery: *"Does this let the running
+assessor grant itself more trust?"* If yes, it MUST NOT exist. AI may discover,
+propose, and draft changes; a deterministic trust policy (§22, §24, and
+`THREAT_MODEL.md`) decides what becomes trusted, and every kernel change lands
+through a reviewed pull request — never runtime self-modification.
 
 ## 18. Conformance (definition of done)
 
@@ -825,4 +894,149 @@ This document is the north star for feature work. Contributors SHALL:
 3. Keep normative language (RFC 2119) precise and non-conversational.
 4. Record notable released changes in `CHANGELOG.md`; this document describes the
    current normative target, not release history.
-```
+
+## 20. Self-evolving architecture — trust zones
+
+AttestArc is partitioned into three trust zones; the boundary is enforced in code
+and process, not merely in prompt text. `THREAT_MODEL.md` is the companion
+rationale.
+
+- **Kernel** (`core/`, `SKILL.md`, the verification/state helpers, `schemas/`, the
+  eval corpus) — highly trusted; changes only through reviewed pull requests, eval-
+  gated, and (for root-of-trust files) two-party reviewed (§22). It MUST NOT be
+  writable by the running skill during an assessment.
+- **Verified knowledge** (`knowledge/`) — trusted for reasoning only after passing
+  the verification chain (§23.3). MAY be refreshed by the Updater, never by the
+  Assessor.
+- **Candidate knowledge** — untrusted (LLM extractions, web discoveries, changelog
+  deltas, researcher claims, user feedback). MAY shape which investigation
+  questions are asked; MUST NOT change a security conclusion.
+
+## 21. Fail-secure runtime policy
+
+The runtime NEVER fetches-then-trusts. On any anomaly it degrades safely: a bad
+signature SHALL reject the pack; expired or unavailable knowledge SHALL fall back
+to the last-known-good bundled snapshot with a warning; an authoritative-vs-
+authoritative conflict SHALL mark the entry `disputed` and downgrade dependent
+conclusions to `needs_review`; an unknown platform/version SHALL route to
+`needs_review`; and an Updater that looks compromised SHALL be disabled.
+Uncertainty MUST route to `needs_review`, never to improvised judgment.
+
+## 22. Principals
+
+Three principals with disjoint capabilities, realized as skill modes plus a
+development workflow (NOT a multi-agent runtime, §16):
+
+- **Assessor** (`/attestarc`, and the domain/`findings`/`fix`/`verify`/`changed`
+  verbs of §9) — reads the repository and *verified* knowledge, writes
+  `findings.json`. It has **no network access** and MUST NOT write the kernel or
+  the knowledge plane.
+- **Updater** (`/attestarc knowledge refresh`) — the only principal permitted
+  network access, restricted to the allow-listed sources in `knowledge/sources.yaml`
+  via the Host's fetch tool. It writes *candidate* knowledge and MAY promote per
+  the deterministic policy (§24.2). It MUST NOT access the target repository, write
+  the kernel, or sign/publish releases.
+- **Evolver** (development-time) — turns learning candidates into proposed branch
+  changes plus paired evals and opens a pull request. It MUST NOT write the
+  production skill, publish a release, or weaken/delete a trusted eval in the same
+  trust step.
+
+The Assessor/Updater split exists so a malicious repository cannot turn the
+security-assessment path into network egress or data exfiltration.
+
+## 23. The knowledge plane
+
+### 23.1 KnowledgeEntry
+
+The canonical schema is `schemas/knowledge.schema.json`. Knowledge is stored as
+JSONL packs (`knowledge/bootstrap/*.jsonl`), one entry per line. A `KnowledgeEntry`
+SHALL contain `id`, `kind` (`platform-semantics` | `api` | `standard` | `guidance`),
+`platform`, `subject`, `claim`, `applies_to` (`product`, and OPTIONAL `events`,
+`action`, `version`), `valid_from`, `status` (`active` | `superseded` | `disputed`
+| `retired` | `draft`), `confidence` (`authoritative` | `corroborated` |
+`candidate`), and `sources` (each: `publisher`, `authority` (integer, assigned by
+the registry — never model-chosen), `type`, `url`, `retrieved_at`,
+`content_hash`). It MAY contain `expires`, `supersedes`, `last_verified`, and
+`compiler.version`. Stable objects SHALL set `additionalProperties: false` with an
+explicit `extensions` escape hatch, mirroring the findings schema (§6.2).
+
+### 23.2 Temporality
+
+Knowledge is temporal, not merely true/false. A lookup SHALL honor `valid_from`,
+`expires`, `status`, and `supersedes`, and MAY be resolved as-of a given date so a
+finding is judged under the semantics that applied when the observed configuration
+was in force — not today's semantics applied backward.
+
+### 23.3 Update security (TUF-inspired)
+
+Packs are distributed and verified like software updates. `knowledge/` ships
+TUF-inspired metadata (`root.json`, `timestamp.json`, `snapshot.json`,
+`targets.json`) with separated roles, signature thresholds, and expiry. Before use,
+`scripts/knowledge_verify.py` SHALL verify, in order: trusted root → signature
+threshold satisfied → timestamp fresh → snapshot consistent → target hash and size
+match → version monotonic (**rollback/freeze rejected**) → load. Signature
+verification shells out to the system `ssh-keygen -Y verify` against the allowed-
+signers in `root.json` (maintainer SSH keys); no Python crypto dependency is
+introduced. Signatures SHALL be identity-constrained (expected issuer, source
+repository, release workflow, ref); a merely-valid signature is insufficient. A
+compromised version SHALL be revocable via a kill switch (`THREAT_MODEL.md` §8):
+clients disable it, roll back to the last verified snapshot, and mark findings
+assessed under it `requires_reverification`.
+
+### 23.4 Findings ↔ knowledge dependencies
+
+A finding derived from a knowledge entry SHALL record `knowledge_dependencies`
+(array of `{id, version | content_hash}`). When a dependency is superseded or
+revoked, `state.py reverify` SHALL identify the dependent findings and `list`/`get`
+SHALL surface a read-time `requires_reverification: true` view; the stored `status`
+is never silently mutated, and a knowledge change MUST NEVER auto-resolve a finding.
+The Host SHALL re-observe the actual condition before acting on such a finding
+(§11.1, §13.4).
+
+### 23.5 Helpers
+
+`scripts/knowledge.py` SHALL provide `status` (per-domain freshness), `lookup`
+(`--platform`/`--subject`/`--topic`, OPTIONAL `--as-of`; temporal and status-aware),
+and `explain <id>` (claim, applicability, sources, `valid_from`, `last_verified`,
+supersession). It emits facts, holds no network access, and is confined to its own
+knowledge-root base directory (default `~/.attestarc/knowledge`, global across
+repositories) via `_pathsafe` with a root distinct from — and never derived from —
+the assessed repository. `scripts/knowledge_compile.py` is the Updater's ingest
+tool (§24.1). The repo-local runtime artifact remains only `.attestarc/findings.json`
+(§5); the knowledge cache lives outside any assessed repository.
+
+## 24. Evolution loop
+
+### 24.1 Learning candidates
+
+Assessment feedback — false positives, false negatives, missing evidence, new
+platform behavior, poor remediation, new attack patterns, knowledge conflicts,
+methodology gaps, helper gaps — becomes a structured `LearningCandidate`
+(`schemas/learning-candidate.schema.json`), classifying the required change as
+knowledge / reference / helper / methodology. Candidates default to **local-only**;
+secrets and private repository content MUST NOT enter learning — only sanitized
+attack *shapes*. The `evolution/` directory holds this scaffolding and is NOT
+shipped in the payload.
+
+### 24.2 Promotion policy
+
+Promotion from candidate to verified is **deterministic** (`core/promotion-policy.md`);
+the LLM may propose but never promote. Tiers: **auto-promote** (authoritative
+vendor doc/changelog + structured claim + no conflict + evals pass + valid
+signature + not security-negative); **require review** (changes to reachability or
+severity semantics, or any security-*negative* change where previously-vulnerable
+becomes "safe"); **two-party review** (root-of-trust files: `core/agent-safety.md`,
+`core/promotion-policy.md`, `scripts/knowledge_verify.py`, `knowledge/root.json`,
+the release workflow, or any eval weakening/deletion); **never auto-promote**
+(blog/issue/researcher/model inference → candidate only). Authority is assigned by
+`knowledge/sources.yaml`, never by the model.
+
+### 24.3 Eval-gated evolution
+
+The eval corpus is root-of-trust. An evolution step MAY *add* paired find/refuse
+evals (and, where relevant, an asymmetric quartet: exploitable / mitigated /
+unknown → `needs_review` / historical version-specific) but MUST NOT weaken or
+delete a trusted eval in the same trust step. The Evolver produces a candidate
+patch, generates the paired evals, runs the existing plus new corpus, and opens a
+pull request with rationale and provenance. There is no eval-runner engine (§16);
+cases remain structured specs run interactively (§14.2).
