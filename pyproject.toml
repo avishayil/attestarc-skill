@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "attestarc-skill"
-version = "0.3.1"
+version = "0.3.2"
 description = "Installable software supply-chain security Agent Skill for Claude Code and Cursor"
 readme = "README.md"
 license = { text = "MIT" }

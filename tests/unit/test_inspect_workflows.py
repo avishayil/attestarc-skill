@@ -629,3 +629,97 @@ def test_run_excerpt_is_whitespace_collapsed_and_truncated():
     assert "\n" not in excerpt
     assert excerpt.endswith("...")
     assert len(excerpt) == 203  # 200 chars + "..."
+
+
+# --------------------------------------------------------------------------- #
+# read-path containment (the repository is untrusted input)
+# --------------------------------------------------------------------------- #
+def _make_repo_with_workflows(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".github" / "workflows").mkdir(parents=True)
+    (repo / ".github" / "workflows" / "ci.yml").write_text(
+        "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        "    steps:\n      - run: make\n"
+    )
+    return repo
+
+
+def _secret_outside(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.yml"
+    secret.write_text("on: push\njobs:\n  leak:\n    runs-on: ubuntu-latest\n")
+    return outside, secret
+
+
+def test_inspect_paths_refuses_absolute_path_outside_root(tmp_path):
+    repo = _make_repo_with_workflows(tmp_path)
+    _outside, secret = _secret_outside(tmp_path)
+    wfs = iw.inspect_paths([str(secret)], root=str(repo))["workflows"]
+    assert len(wfs) == 1
+    assert wfs[0]["out_of_root"] is True
+    assert wfs[0]["parse_partial"] is True
+    assert "jobs" not in wfs[0]  # never parsed / leaked
+
+
+def test_inspect_paths_refuses_dotdot_traversal(tmp_path):
+    repo = _make_repo_with_workflows(tmp_path)
+    _outside, _secret = _secret_outside(tmp_path)
+    wfs = iw.inspect_paths(["../outside/secret.yml"], root=str(repo))["workflows"]
+    assert len(wfs) == 1
+    assert wfs[0]["out_of_root"] is True
+    assert "jobs" not in wfs[0]
+
+
+def test_inspect_paths_refuses_symlinked_workflow_file(tmp_path):
+    repo = _make_repo_with_workflows(tmp_path)
+    _outside, secret = _secret_outside(tmp_path)
+    link = repo / ".github" / "workflows" / "evil.yml"
+    os.symlink(str(secret), str(link))
+    wfs = iw.inspect_paths([".github/workflows/evil.yml"], root=str(repo))["workflows"]
+    assert len(wfs) == 1
+    assert wfs[0]["out_of_root"] is True
+    assert "jobs" not in wfs[0]
+
+
+def test_inspect_paths_refuses_symlink_to_nonexistent_outside_target(tmp_path):
+    # A *broken* symlink whose target is outside root must still be refused --
+    # os.path.realpath resolves the escaping link even when the target is absent.
+    repo = _make_repo_with_workflows(tmp_path)
+    link = repo / ".github" / "workflows" / "evil.yml"
+    os.symlink(os.path.join("..", "..", "..", "outside", "gone.yml"), str(link))
+    wfs = iw.inspect_paths([".github/workflows/evil.yml"], root=str(repo))["workflows"]
+    assert len(wfs) == 1
+    assert wfs[0]["out_of_root"] is True
+    assert "jobs" not in wfs[0]
+    # ...and enumeration skips it entirely.
+    assert os.path.join(".github", "workflows", "evil.yml") \
+        not in iw._iter_workflow_files(str(repo))
+
+
+def test_inspect_paths_reads_a_legit_in_root_workflow(tmp_path):
+    # Sanity: normal in-root files are still parsed.
+    repo = _make_repo_with_workflows(tmp_path)
+    wfs = iw.inspect_paths([".github/workflows/ci.yml"], root=str(repo))["workflows"]
+    assert len(wfs) == 1
+    assert "out_of_root" not in wfs[0]
+    assert "jobs" in wfs[0]
+
+
+def test_iter_workflow_files_skips_symlinked_entry(tmp_path):
+    repo = _make_repo_with_workflows(tmp_path)
+    _outside, secret = _secret_outside(tmp_path)
+    os.symlink(str(secret), str(repo / ".github" / "workflows" / "evil.yml"))
+    found = iw._iter_workflow_files(str(repo))
+    assert os.path.join(".github", "workflows", "ci.yml") in found
+    assert os.path.join(".github", "workflows", "evil.yml") not in found
+
+
+def test_iter_workflow_files_skips_symlinked_workflows_dir(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".github").mkdir(parents=True)
+    outside_wf = tmp_path / "outside_wf"
+    outside_wf.mkdir()
+    (outside_wf / "ci.yml").write_text("on: push\n")
+    os.symlink(str(outside_wf), str(repo / ".github" / "workflows"))
+    assert iw._iter_workflow_files(str(repo)) == []

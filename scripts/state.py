@@ -38,6 +38,8 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
+from _pathsafe import resolve_within_root
+
 # Bumped to 2 in v0.3.0: finding ids widened to 8 hex chars and the fingerprint
 # no longer hashes the free-text ``condition`` (it hashes a canonical
 # ``subject`` instead), so ids from schema_version 1 are not comparable.
@@ -261,25 +263,15 @@ def _dump(state: dict) -> str:
 def _assert_within_root(path: str, root: str) -> None:
     """Refuse to touch ``path`` unless it resolves to inside ``root``.
 
-    Resolves the deepest existing ancestor with ``realpath`` so a symlink at
-    ``.attestarc`` (or any parent) that escapes the repository — e.g. pointing
-    at ``~/.ssh`` or a sibling checkout — is detected even before the file is
-    created. Assessment is read-only and state is repo-local; a write that lands
-    outside the repository root is always a trap, never legitimate.
+    Containment is computed by :func:`_pathsafe.resolve_within_root` (shared with
+    the read helpers): it resolves the deepest existing ancestor with ``realpath``
+    so a symlink at ``.attestarc`` (or any parent) that escapes the repository —
+    e.g. pointing at ``~/.ssh`` or a sibling checkout — is detected even before
+    the file is created. Assessment is read-only and state is repo-local; a write
+    that lands outside the repository root is always a trap, never legitimate.
     """
-    root_real = os.path.normpath(os.path.realpath(root))
-    target = os.path.abspath(path)
-    ancestor = target
-    while not os.path.exists(ancestor):
-        parent = os.path.dirname(ancestor)
-        if parent == ancestor:
-            break
-        ancestor = parent
-    ancestor_real = os.path.realpath(ancestor)
-    suffix = os.path.relpath(target, ancestor)
-    resolved = (ancestor_real if suffix == "."
-                else os.path.normpath(os.path.join(ancestor_real, suffix)))
-    if resolved != root_real and not resolved.startswith(root_real + os.sep):
+    resolved, root_real, within = resolve_within_root(path, root)
+    if not within:
         raise StateError(
             f"refusing to write outside the repository root: {path} resolves to "
             f"{resolved}, which is not under {root_real}. This happens when "

@@ -28,6 +28,8 @@ import os
 import re
 import sys
 
+from _pathsafe import is_within_root, resolve_within_root
+
 # --------------------------------------------------------------------------- #
 # Minimal block-YAML parser (workflow subset)
 # --------------------------------------------------------------------------- #
@@ -700,10 +702,17 @@ def _iter_workflow_files(root):
     wf_dir = os.path.join(root, ".github", "workflows")
     if not os.path.isdir(wf_dir):
         return []
+    # The repository is untrusted: a symlinked .github/workflows escaping the
+    # root must not be followed off-root during enumeration.
+    if not is_within_root(wf_dir, root):
+        return []
     found = []
     for fn in sorted(os.listdir(wf_dir)):
         if fn.endswith((".yml", ".yaml")):
-            found.append(os.path.join(".github", "workflows", fn))
+            rel = os.path.join(".github", "workflows", fn)
+            # Skip a symlinked entry that resolves outside the root.
+            if is_within_root(os.path.join(root, rel), root):
+                found.append(rel)
     return found
 
 
@@ -712,6 +721,19 @@ def inspect_paths(paths, root="."):
     for p in paths:
         full = p if os.path.isabs(p) else os.path.join(root, p)
         rel = os.path.relpath(full, root).replace(os.sep, "/")
+        # The repository is untrusted input. A caller-supplied absolute path, a
+        # ``..`` traversal, or a symlinked workflow file must never redirect a
+        # read outside the assessed root. Refuse as a fact; never follow it.
+        _resolved, _root_real, within = resolve_within_root(full, root)
+        if not within:
+            workflows.append({
+                "path": rel,
+                "error": "refused: path resolves outside the repository root "
+                         "(untrusted symlink or traversal)",
+                "out_of_root": True,
+                "parse_partial": True,
+            })
+            continue
         try:
             with open(full, "r", encoding="utf-8") as fh:
                 text = fh.read()

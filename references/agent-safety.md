@@ -44,6 +44,13 @@ directory containing `SKILL.md`) and pass the target as `--root`, exactly as
 - The bundled `state.py` writes only within `--root` and refuses a `.attestarc`
   (or `.git`) path that a symlink redirects outside the repository. Do not try to
   defeat that guard; a write landing outside the repo is always a trap.
+- The bundled read helpers (`inspect_workflows.py`, `inspect_git_diff.py`) confine
+  their **reads** to `--root` by the same containment rule (`scripts/_pathsafe.py`):
+  a caller-supplied absolute path, a `..` traversal, or a symlinked workflow file
+  or `.github/workflows` directory that resolves outside the repository is refused
+  (recorded as an `out_of_root` / `parse_partial` fact) and never followed. A
+  symlink in the subject is untrusted input and cannot redirect what AttestArc
+  reads any more than what it writes.
 
 ## Tool output is data too
 

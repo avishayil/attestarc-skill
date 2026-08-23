@@ -3,6 +3,33 @@
 All notable changes to AttestArc are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-08-23
+
+**Public Preview — GitHub & GitHub Actions.** A security hotfix for the
+deterministic helpers. The repository under assessment is untrusted input, and
+the workflow inspector was confining its *writes* but not its *reads*.
+
+### Fixed
+
+- **Read-path containment in the read helpers (`inspect_workflows.py`,
+  `inspect_git_diff.py`).** A caller-supplied absolute path, a `..` traversal, or
+  a symlinked workflow file / `.github/workflows` directory could redirect a
+  helper *read* outside the assessed repository root. Reads are now confined to
+  `--root` by the same containment rule that already guarded `state.py` writes,
+  extracted into a shared `scripts/_pathsafe.py`. An escaping entry is omitted
+  from workflow enumeration and, if named explicitly, returned as an
+  `out_of_root` / `parse_partial` fact — never opened or parsed. Broken symlinks
+  whose off-root target does not exist are caught too (via `os.path.realpath`).
+  `references/agent-safety.md` documents the read-side guarantee. New unit tests
+  cover absolute-path, `..`, symlinked-file, symlinked-dir, and broken-symlink
+  escapes, plus a `helper-read-escape` fixture and eval case.
+
+### Notes
+
+- No `findings.json` schema, id, or fingerprint change from `0.3.1`; existing
+  local state remains compatible. `state.py` write behavior is unchanged (the
+  containment logic was refactored into `_pathsafe.py`, not altered).
+
 ## [0.3.1] — 2026-08-23
 
 **Public Preview — GitHub & GitHub Actions.** A fact-fidelity fast-follow to
