@@ -159,10 +159,13 @@ Skill version and is the value the installer reports; there is no separate
 
 ### 4.2 Installation destinations
 
-The default destination is `.claude/skills/attestarc/`, which is discovered by
-**both Claude Code and Cursor** (Cursor also scans `.claude/skills/`); a single
-install therefore serves both clients. A separate `.cursor/skills/attestarc/`
-copy is an explicit opt-in.
+The default destination is `.claude/skills/attestarc/`, where **Claude Code**
+natively discovers Agent Skills. **Cursor** has no native Skills system and does
+not auto-discover `.claude/skills/`; it uses project rules (`.cursor/rules/*.mdc`)
+and `AGENTS.md`. To use AttestArc in Cursor, the skill is referenced from a rule
+that points at its `SKILL.md` (see README). The `--platform cursor`
+destination (`.cursor/skills/attestarc/`) merely places the payload for such a
+rule to reference; Cursor does not load it automatically.
 
 | Platform | Scope   | Destination                                    |
 |----------|---------|------------------------------------------------|
@@ -178,8 +181,8 @@ copy is an explicit opt-in.
 <dir>` MAY override the project destination and SHALL be ignored (with a warning)
 for `--scope user`. `--dry-run` SHALL report intended actions without modifying
 the filesystem. `install.py` SHALL additionally accept `--force`. After a
-`claude` install the installer SHOULD note that Cursor also discovers the
-destination.
+`cursor` install the installer SHOULD note that Cursor does not auto-load the
+destination and that a `.cursor/rules/*.mdc` referencing the skill is required.
 
 The installer SHALL: (1) validate the source Skill (SKILL.md present at the repo
 root with frontmatter `name: attestarc`); (2) resolve the destination(s); (3)
@@ -645,7 +648,8 @@ application**; Claude Code and Cursor provide the agent runtime.
 
 ## 18. Conformance (definition of done)
 
-A conforming V1 SHALL satisfy: installs in Claude Code and Cursor; `/attestarc`
+A conforming V1 SHALL satisfy: installs as a native Agent Skill in Claude Code
+and is usable in Cursor via a referencing rule; `/attestarc`
 is discoverable and auto-invokes for clearly relevant security requests;
 discovery precedes findings; GitHub Actions workflows parse reliably; findings
 persist across sessions; duplicates are avoided; every finding carries evidence;

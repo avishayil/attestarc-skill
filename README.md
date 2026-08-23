@@ -2,7 +2,11 @@
 
 Security expertise for your coding agent.
 
-Install AttestArc into Claude Code or Cursor and run:
+[![CI](https://github.com/avishayil/attestarc-skill/actions/workflows/ci.yml/badge.svg)](https://github.com/avishayil/attestarc-skill/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Getting started](https://img.shields.io/badge/docs-getting%20started-22C55E.svg)](https://avishayil.github.io/attestarc-skill/)
+
+Install AttestArc into Claude Code (or wire it into Cursor) and run:
 
     /attestarc
 
@@ -14,6 +18,8 @@ No scanner service.
 No compliance report.
 
 It works inside the repository, with the coding agent you already use.
+
+**New here?** Start with the [getting-started site](https://avishayil.github.io/attestarc-skill/).
 
 ---
 
@@ -31,28 +37,71 @@ The principle:
 
 ## Install
 
-From a clone of this repository:
+### Prerequisites
+
+- **Python 3.8+** (standard library only — no third-party packages) and **git**.
+- **GitHub CLI (`gh`)** — optional, recommended for read-only remote checks
+  (branch protection, rulesets, Actions policy).
+
+### Claude Code (recommended)
+
+AttestArc is a native Claude Agent Skill: Claude Code automatically discovers
+skills under `.claude/skills/`. The simplest install is a clone:
 
 ```bash
-# Current project — serves BOTH Claude Code and Cursor
-python install.py
+# Global — available in every repository you open
+git clone https://github.com/avishayil/attestarc-skill.git ~/.claude/skills/attestarc
 
-# Global (available in every repo you open), still both clients
-python install.py --scope user
+# Or per-project — scoped to one repository
+git clone https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc
+```
 
-# Install into a specific repository
+Prefer to copy only the skill payload (leaving development files behind)? Use the
+installer:
+
+```bash
+git clone https://github.com/avishayil/attestarc-skill.git
+cd attestarc-skill
+
+python install.py                                  # current project → .claude/skills/attestarc/
+python install.py --scope user                     # global → ~/.claude/skills/attestarc/
 python install.py --scope project --target /path/to/project
 ```
 
-A single install to `.claude/skills/attestarc/` is discovered by **both** Claude
-Code and Cursor (Cursor also scans `.claude/skills/`). Use `--platform cursor`
-only if you specifically want a separate `.cursor/skills/attestarc/` copy, or
-`--platform both` for both locations.
+Then, in Claude Code, run `/attestarc`.
 
-Uninstall mirrors the same flags:
+### Cursor
+
+Cursor does **not** have a native Skills system — it uses project **rules**
+(`.cursor/rules/*.mdc`) and `AGENTS.md`, and it does not auto-discover
+`.claude/skills/`. You can still use AttestArc in Cursor by cloning the skill and
+pointing a rule at it:
 
 ```bash
-python uninstall.py --scope user
+git clone https://github.com/avishayil/attestarc-skill.git .cursor/attestarc
+```
+
+Create `.cursor/rules/attestarc.mdc`:
+
+```mdc
+---
+description: AttestArc — software supply-chain security assessment and remediation
+alwaysApply: false
+---
+When asked to assess, harden, review, or remediate repository / CI-CD /
+GitHub Actions / dependency / secrets / supply-chain security, act as the
+security engineer described in `.cursor/attestarc/SKILL.md`. Follow its
+lifecycle, and load the files under `.cursor/attestarc/references/` on demand.
+```
+
+Then ask Cursor's agent to *"assess this repository's supply-chain security with
+AttestArc"* (or `@`-mention the rule).
+
+### Uninstall
+
+```bash
+python uninstall.py                # current project
+python uninstall.py --scope user   # global
 ```
 
 Installation only copies the skill payload (`SKILL.md`, `references/`,
@@ -133,8 +182,10 @@ python -m pytest        # deterministic code tests (no dependencies required)
 `evals/` holds interactive behavioral evaluations of the *agent* (see
 [`evals/README.md`](evals/README.md)); they are judged, not run by pytest.
 
-See [`SPECIFICATION.md`](SPECIFICATION.md) for the normative specification and
-`CLAUDE.md` for development rules.
+See [`SPECIFICATION.md`](SPECIFICATION.md) for the normative specification,
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for how to contribute, and `CLAUDE.md` for
+development rules. Security issues: see [`SECURITY.md`](SECURITY.md). Release
+history: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 
