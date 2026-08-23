@@ -174,7 +174,12 @@ def discover(root: str) -> dict:
             security_files.add("codeowners")
 
     # Shallow-ish walk for container / IaC signals.
+    # GitHub Actions only *executes* workflows in the repository-root
+    # .github/workflows/. Workflow files found deeper in the tree (test
+    # fixtures, examples, vendored copies) never run, so they are reported
+    # separately and must not be assessed as the repository's active CI.
     workflow_files: list[str] = []
+    non_root_workflow_files: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
         depth = os.path.relpath(dirpath, root).count(os.sep)
@@ -190,10 +195,12 @@ def discover(root: str) -> dict:
             if fn == "Chart.yaml" or fn == "Chart.yml":
                 helm = True
         rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
-        if rel_dir.endswith(".github/workflows"):
+        if rel_dir == ".github/workflows" or rel_dir.endswith("/.github/workflows"):
+            bucket = (workflow_files if rel_dir == ".github/workflows"
+                      else non_root_workflow_files)
             for fn in filenames:
                 if fn.endswith((".yml", ".yaml")):
-                    workflow_files.append(f"{rel_dir}/{fn}")
+                    bucket.append(f"{rel_dir}/{fn}")
         # Heuristic: kubernetes manifests dir
         if os.path.basename(dirpath) in ("k8s", "kubernetes", "manifests"):
             kubernetes = True
@@ -231,6 +238,7 @@ def discover(root: str) -> dict:
             "iac": sorted(iac),
             "security_files": sorted(security_files),
             "workflow_files": sorted(workflow_files),
+            "non_root_workflow_files": sorted(non_root_workflow_files),
         },
         "notes": [],
     }
@@ -247,6 +255,14 @@ def discover(root: str) -> dict:
         result["notes"].append(
             "SCM inferred locally. Remote settings (branch protection, rulesets, "
             "environments) are not verified here."
+        )
+    if non_root_workflow_files:
+        result["notes"].append(
+            f"{len(non_root_workflow_files)} workflow file(s) found outside the "
+            "repository root. GitHub Actions only executes workflows in the root "
+            ".github/workflows/, so these are not active CI (likely test "
+            "fixtures, examples, or vendored copies); do not assess them as this "
+            "repository's pipelines without confirmation."
         )
     return result
 
