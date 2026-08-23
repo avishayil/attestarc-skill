@@ -152,15 +152,41 @@ def looks_like_secret(text: str) -> bool:
     return any(p.search(text) for p in _SECRET_PATTERNS)
 
 
+def _iter_strings(value):
+    """Yield every string leaf in a nested dict/list structure."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _iter_strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _iter_strings(v)
+
+
 def _assert_no_secrets(finding: dict) -> None:
+    # Evidence: prefer small structured facts, but scan every free-text field.
     for ev in finding.get("evidence", []) or []:
-        observed = ev.get("observed", "")
-        if isinstance(observed, str) and looks_like_secret(observed):
-            raise StateError(
-                "refusing to persist finding: evidence 'observed' appears to "
-                "contain a raw secret value. Store only metadata "
-                "(secret name/source), never the value itself."
-            )
+        if not isinstance(ev, dict):
+            continue
+        for field in ("observed", "value", "key"):
+            text = ev.get(field, "")
+            if isinstance(text, str) and looks_like_secret(text):
+                raise StateError(
+                    f"refusing to persist finding: evidence {field!r} appears "
+                    "to contain a raw secret value. Store only metadata "
+                    "(secret name/source), never the value itself."
+                )
+    # Threat reasoning is free-form; make sure no secret leaked into it.
+    threat = finding.get("threat")
+    if isinstance(threat, (dict, list)):
+        for text in _iter_strings(threat):
+            if looks_like_secret(text):
+                raise StateError(
+                    "refusing to persist finding: 'threat' appears to contain "
+                    "a raw secret value. Describe the attack path with "
+                    "metadata, never secret values."
+                )
 
 
 # --------------------------------------------------------------------------- #
@@ -394,7 +420,8 @@ def upsert_finding(state: dict, finding: dict) -> tuple[dict, bool]:
             # Refresh the observable, agent-supplied fields.
             for key in ("title", "severity", "confidence", "impact",
                         "remediation", "verification", "category", "domain",
-                        "resource", "condition"):
+                        "resource", "condition", "threat", "trust_boundary",
+                        "related_findings"):
                 if key in incoming:
                     merged[key] = incoming[key]
             merged["evidence"] = _merge_evidence(

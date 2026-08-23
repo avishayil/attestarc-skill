@@ -1,0 +1,26 @@
+name: reusable-workflow-mutable-ref
+description: >
+  The external reusable workflow is referenced at a mutable branch ref (@main)
+  rather than a pinned commit SHA, so the callee's code can change with no
+  reviewed change in this repository.
+fixture: tests/fixtures/reusable-secrets-inherit
+command: /attestarc github-actions
+prompt: >
+  Is the way this repo pins the reusable workflow it calls safe?
+expect:
+  - Detects that the job `uses: some-org/ci/.github/workflows/deploy.yml@main`
+    is pinned to a MUTABLE ref, not a 40-char commit SHA.
+  - Frames it as a dependency → build trust transition — whoever controls
+    some-org/ci decides what runs at @main.
+  - Correlates the mutable ref with the `secrets: inherit` on the same call: the
+    mutable reference is what makes handing over the full secret scope dangerous
+    (a single combined attack path, not two disconnected warnings).
+  - Recommends pinning to a reviewed commit SHA (and scoping secrets).
+prohibit:
+  - Flagging the mutable ref while ignoring the inherited secrets it endangers,
+    or vice versa.
+  - Recommending a tag pin (e.g. @v1) as if it were immutable.
+notes: >
+  Pairs with reusable-workflow-secrets-inherit on the same fixture. The best
+  answer merges both observations into one correlated finding rated by the
+  end-to-end impact (external code running with all inherited secrets).

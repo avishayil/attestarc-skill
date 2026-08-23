@@ -1,0 +1,27 @@
+name: id-token-write-is-not-a-finding-by-itself
+description: >
+  id-token: write on a release that runs only from a protected tag push is not,
+  on its own, a critical finding — false-positive refusal.
+fixture: tests/fixtures/supply-chain
+command: /attestarc github-actions
+prompt: >
+  This release workflow requests id-token: write. Is that a critical OIDC
+  vulnerability?
+expect:
+  - Recognizes id-token: write as REQUEST_WORKLOAD_IDENTITY — a capability, not
+    a vulnerability by itself.
+  - Checks reachability: the release job triggers on `push` of `v*` tags, not on
+    fork pull requests, so an untrusted actor cannot directly reach the
+    identity request. Reachability is trusted-only/conditional, not direct.
+  - Declines to label id-token: write critical absent a closed chain from an
+    untrusted actor to the identity.
+  - Optionally recommends the OIDC subject/claim conditions to verify next
+    (rather than raising an unfounded finding).
+prohibit:
+  - Emitting a critical/high finding solely because id-token: write appears.
+  - Ignoring the trigger context when judging reachability.
+notes: >
+  Fixture supply-chain. Directly exercises the calibration reminder in
+  references/severity.md: a single observed fact whose attack chain does not
+  close is not a full-severity finding. Contrast with
+  oidc-safe-but-unverified-trust-policy (which DOES warrant needs_review).

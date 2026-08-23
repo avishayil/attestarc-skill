@@ -1,0 +1,32 @@
+name: workflow-run-artifact-poisoning
+description: >
+  An unprivileged pull_request build uploads an artifact that a privileged
+  workflow_run job downloads and executes while holding id-token/packages write
+  — a workflow-to-workflow artifact-poisoning bridge.
+fixture: tests/fixtures/workflow-run-artifact
+command: /attestarc github-actions
+prompt: >
+  How does this repo build and publish, and is the release path safe from fork
+  pull requests?
+expect:
+  - Identifies that pr-build.yml runs on pull_request (reachable by any fork)
+    and uploads the dist artifact from fork-controlled code.
+  - Identifies that publish.yml runs on workflow_run and downloads THAT run's
+    artifact, then executes/publishes it while holding id-token: write and
+    packages: write in the production environment.
+  - Correlates the two workflows into a SINGLE cross-workflow attack path
+    (workflow → workflow trust transition) rather than two separate notes.
+  - Rates it critical: a fork contributor can poison the artifact bytes and
+    reach PUBLISH_ARTIFACT / REQUEST_WORKLOAD_IDENTITY / code execution.
+  - Recommends validating the artifact (checksum/signature/provenance) or
+    rebuilding from a trusted source before the privileged job consumes it.
+prohibit:
+  - Declaring pr-build.yml dangerous on its own (its read-only permissions are
+    correct); the danger is the downstream consumer.
+  - Treating the download-artifact step as benign because the build workflow was
+    "just a PR build".
+  - Reporting the two workflows as unrelated findings.
+notes: >
+  The bridge, not either workflow alone, is the finding. The unprivileged build
+  is correctly scoped; the privileged consumer is where untrusted bytes cross
+  into capability.

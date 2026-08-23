@@ -5,14 +5,24 @@ Use `scripts/inspect_workflows.py` to get normalized facts, then reason here.
 The script produces facts; **you** decide what they mean. Never treat an event
 name or permission in isolation — evaluate combinations and repository context.
 
+Threat model: see `references/threats/ci-cd-threats.md` for the portable attack
+classes (untrusted-code execution, workflow-to-workflow privilege bridging, cache
+poisoning, reusable-workflow trust, download-and-execute). This file teaches how
+to observe and remediate them on GitHub Actions.
+
 ## What to gather first
 
 Run `python scripts/inspect_workflows.py`. For each workflow you get: `triggers`,
 workflow-level `permissions`, and per-job `runner`/`self_hosted`, `environment`,
-`permissions`, `actions[]` (`name`, `ref`, `pinned`, `kind`), `run_steps[]`
-(`expressions`, `references_untrusted_input`), and `checkout_refs[]`
-(`references_untrusted_ref`). `parse_partial: true` means read the raw file
-before concluding.
+`permissions`, `uses` / `uses_pinned` (job-level reusable-workflow call and
+whether it is SHA-pinned), `secrets` (what a reusable-workflow call passes —
+`"inherit"`, a name→source map, or none), `uses_cache` (the job reads/writes an
+Actions cache), `actions[]` (`name`, `ref`, `pinned`, `kind`), `run_steps[]`
+(`expressions`, `references_untrusted_input`, `fetch_execute`,
+`fetch_execute_excerpt`), and `checkout_refs[]` (`references_untrusted_ref`).
+`parse_partial: true` means read the raw file before concluding. These are
+presence facts, not verdicts: a `uses_cache: true` or `secrets: inherit` is only
+a finding once you close the attack chain to a reachable, valuable asset.
 
 ## Triggers
 
@@ -26,11 +36,22 @@ repository_dispatch  issue_comment  push  schedule
 Key distinction — **trust of the code being run and the token available**:
 
 - `pull_request` (from a fork) runs with a **read-only** `GITHUB_TOKEN` and no
-  secrets by default. Running untrusted PR code here is expected and normally
-  safe.
+  secrets **under the platform default**. Running untrusted PR code here is
+  expected and normally safe.
 - `pull_request_target`, `workflow_run`, `issue_comment`, `repository_dispatch`
   run in the context of the **base repository**: they can carry secrets and a
   writable token, but are triggered by potentially untrusted actors.
+
+**Effective fork-PR permissions are a setting, not a constant.** The read-only /
+no-secrets behaviour above is the *default*, and it can be widened server-side:
+the repository/org Actions settings "Send write tokens to workflows from fork
+pull requests" and "Send secrets to workflows from fork pull requests" (common on
+some private-repo configurations) grant a fork PR a writable token and/or
+secrets even on a plain `pull_request`. You cannot see this from the workflow
+file. Reason from the default, but treat the effective setting as an
+`evidence_gap`: if it is unverifiable, record the affected transition as
+`needs_review` rather than assuming the default holds (correlate with
+`references/github.md` remote-state discovery).
 
 The classic critical pattern (correlate into ONE finding):
 
@@ -47,10 +68,45 @@ pull_request_target        # runs with base-repo secrets/token
 `environment`/secrets usage. If you see the checkout of PR-controlled code under
 a privileged trigger, that is the finding — do not split it up.
 
-`workflow_run` is similarly dangerous: it runs trusted workflow code but is
-triggered by another (possibly fork-initiated) workflow, and often downloads and
-trusts artifacts from the triggering run. Check what it downloads and whether it
-treats that data as trusted.
+### Workflow → workflow privilege bridging
+
+`workflow_run` runs **trusted, base-repo** workflow code (with secrets and a
+writable token) but is *triggered by another workflow* — including one that ran
+untrusted fork-PR code. The danger is the **data** that crosses from the low-trust
+run into the privileged one:
+
+- **Artifacts.** The privileged `workflow_run` job downloads artifacts produced
+  by the triggering (possibly fork) run and treats them as trusted — e.g.
+  unpacks them, reads a PR number or path from them, comments, or deploys. An
+  attacker who controlled the first run controls those bytes. Category:
+  `workflow-run-artifact-trust`.
+- **Caches.** A privileged job restoring a cache that a lower-trust run populated
+  inherits whatever that run wrote — see cache poisoning below.
+- **Outputs / conclusion.** Branching on `github.event.workflow_run.*` fields the
+  untrusted run influenced.
+
+Close the chain: *fork PR → untrusted first workflow writes artifact/cache →
+`workflow_run` job (secrets + write token) consumes it → capability
+(`WRITE_REPOSITORY`, `PUBLISH_ARTIFACT`, `DEPLOY_TO_ENVIRONMENT`) → asset*. Check
+what the job downloads/restores and whether it validates provenance before using
+it. The `uses_cache` fact flags cache participation; artifact download shows up as
+a `download-artifact` action or a `run_steps` fetch.
+
+### Cache poisoning
+
+The Actions cache is a **trust boundary**, not just a speed optimization. Caches
+are scoped per branch with fallback to the default branch, and a fork PR's job
+can write a cache key that a later privileged run on a protected branch restores.
+If the cached content is executable (compiled binaries, `node_modules`, a
+toolchain, a downloaded dependency) and a privileged job runs it, an attacker who
+poisoned the cache achieves `EXECUTE_UNTRUSTED_CODE` in the privileged context.
+
+`uses_cache: true` on a job is the presence fact. To close the chain ask: can a
+low-trust actor populate the key the privileged job restores, and does the
+privileged job *execute* what it restored (vs merely reading data)? Category:
+`cache-trust-boundary`. Remediation directions: scope/segment cache keys so
+untrusted runs cannot write keys trusted runs read, or avoid restoring caches in
+privileged jobs that execute the restored content.
 
 ## Token permissions
 
@@ -87,8 +143,41 @@ For every `uses:` distinguish `kind`: `local`, `external`, `reusable-workflow`,
   to using trusted tooling (`gh api`, `git ls-remote https://github.com/OWNER/REPO
   TAG`), review it, then pin. Keep the human-readable version in a trailing
   comment: `uses: owner/action@<sha> # v3.1.0`.
-- Reusable workflows (`uses: owner/repo/.github/workflows/x.yml@ref`) should be
-  pinned too, and you should understand what secrets are passed to them.
+- **Docker-based actions are mutable references too.** A `kind: docker` step
+  (`uses: docker://image:tag`, or an action whose `runs.using: docker` points at
+  a registry `image:` tag rather than a digest) executes whatever that tag
+  resolves to at run time — the same drift risk as an unpinned action, but the
+  code is an opaque image. Prefer an immutable digest (`docker://image@sha256:…`).
+  Category: `mutable-docker-action`.
+
+**Reusable workflows and `secrets: inherit`.** A job-level
+`uses: owner/repo/.github/workflows/x.yml@ref` runs another workflow's code with
+whatever secrets the caller passes. The facts to reason over:
+
+- `uses_pinned: false` — the called workflow is a **mutable reference**; its code
+  (and every action *it* runs) can change without a change here. On a privileged
+  caller this is transitive supply-chain exposure. Category:
+  `mutable-reusable-workflow`.
+- `secrets: "inherit"` — the called workflow receives **all** of the caller's
+  secrets, not an explicit subset. Combined with a mutable/third-party callee, or
+  a callee reachable from an untrusted trigger, this hands the full secret set
+  across a trust boundary you may not control. Prefer passing only the named
+  secrets a workflow needs. Category: `reusable-workflow-secrets-inherit`.
+
+Trace the transitive chain: caller trigger → callee ref (pinned?) → what the
+callee does with the inherited secrets/token. A pinned, first-party callee
+receiving one scoped secret is very different from `@main` with `inherit`.
+
+**`actions/checkout` version semantics.** The checked-out ref is what matters,
+not just the action version. Under `pull_request_target`/`workflow_run`, an
+explicit `with: ref: ${{ github.event.pull_request.head.sha }}` (or `head.ref`)
+checks out **attacker-controlled code** into a privileged context —
+`inspect_workflows.py` flags this as `checkout_refs[].references_untrusted_ref`.
+Also note `persist-credentials: true` (the default before you set it false)
+leaves the token on disk for later steps, and `fetch-depth`/submodule options
+that pull additional untrusted content. The safe default checkout under a fork
+`pull_request` is fine; the danger is re-pointing it at PR head under a
+privileged trigger.
 
 ## Untrusted input into shell / expressions
 
@@ -115,6 +204,22 @@ Safe pattern — pass through an environment variable and quote:
 
 Severity depends on the token/secret context of the workflow and whether the
 trigger is reachable by untrusted actors.
+
+## Download-and-execute in `run:` steps
+
+A step that fetches content from the network and pipes it straight into a shell
+(`curl … | sh`, `wget … && chmod +x && ./…`, PowerShell `irm … | iex`) runs code
+that is neither in the repository nor pinned — its behaviour is whatever the
+remote server returns at run time, and the endpoint (or its DNS/TLS) can be
+attacker-influenced. `inspect_workflows.py` surfaces this as
+`run_steps[].fetch_execute: true` with a `fetch_execute_excerpt` of the matched
+line. This is a **fact, not a verdict**: weigh it by the job's privilege and
+trigger. `curl https://get.example.io | sh` installing a toolchain in a
+release/deploy job (secrets, `id-token`, `packages: write`) is
+`EXECUTE_UNTRUSTED_CODE` reaching a valuable capability → potentially high; the
+same line in a throwaway lint job on `pull_request` is far weaker. Category:
+`download-and-execute`. Remediation directions: pin to a versioned installer with
+a checksum, vendor the script and review it, or replace it with a pinned action.
 
 ## Runners
 
@@ -163,5 +268,7 @@ jobs:
 
 Record findings with `domain: ci`, an appropriate `category` (e.g.
 `mutable-action`, `excessive-permissions`, `pr-target-untrusted-checkout`,
-`script-injection`, `self-hosted-untrusted`), and `resource` set to the workflow
-path so ids stay stable.
+`script-injection`, `self-hosted-untrusted`, `workflow-run-artifact-trust`,
+`cache-trust-boundary`, `reusable-workflow-secrets-inherit`,
+`mutable-reusable-workflow`, `mutable-docker-action`, `download-and-execute`),
+and `resource` set to the workflow path so ids stay stable.

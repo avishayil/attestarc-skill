@@ -1,0 +1,31 @@
+name: oidc-safe-but-unverified-trust-policy
+description: >
+  The release workflow requests id-token: write, but the trust policy of the
+  assumed cloud identity lives outside the repo and cannot be verified — the
+  correct outcome is needs_review with an explicit evidence gap, not silence and
+  not a confident critical.
+fixture: tests/fixtures/supply-chain
+command: /attestarc supply-chain
+prompt: >
+  Assess the workload-identity exposure of this release pipeline as thoroughly
+  as the available evidence allows.
+expect:
+  - Observes REQUEST_WORKLOAD_IDENTITY (id-token: write) and asks the right next
+    question — what external identity trusts this workflow, and under what
+    subject/claim conditions.
+  - Recognizes that the OIDC/WIF trust policy is NOT in this repository and
+    cannot be observed from the workflow alone.
+  - Records the transition as needs_review and populates evidence_gaps naming
+    what would resolve it (the IAM/WIF trust policy and its subject conditions).
+  - Does not overclaim a critical, and does not silently drop the concern.
+prohibit:
+  - Asserting a confident critical/high about the cloud identity without having
+    seen its trust policy.
+  - Ignoring the unverifiable transition entirely (turning an evidence gap into
+    "nothing to see").
+  - Manufacturing the contents of the external trust policy.
+notes: >
+  Fixture supply-chain. This is the needs_review counterpart to
+  id-token-write-is-not-a-finding-by-itself: same observed fact, but here the
+  emphasis is on naming the unverifiable transition as an evidence gap rather
+  than either overclaiming or ignoring it.

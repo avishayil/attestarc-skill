@@ -1,0 +1,116 @@
+# Threat model: CI/CD pipelines
+
+The portable attack classes for build/test/release pipelines, framed as
+capability chains. Pair this with `references/github-actions.md` for GitHub
+observation, the parser facts, and remediation. The recurring shape is the
+grammar from `references/methodology.md`:
+
+```
+ACTOR → ENTRY POINT → CONTROLLED INPUT → TRUST TRANSITION
+      → CAPABILITY → TARGET ASSET → IMPACT
+```
+
+A pipeline is dangerous when a low-trust actor reaches a step that holds a
+high-trust capability (secrets, a writable token, a workload identity, a publish
+right). Walk the reachability ladder — `present → reachable → exploitable →
+impactful` — before you rate anything.
+
+## Poisoned Pipeline Execution (PPE)
+
+An untrusted actor gets their code or input to run inside a privileged pipeline.
+
+- **Direct PPE.** The controlled input *is* code the pipeline runs. Classic:
+  external contributor → `pull_request_target` (or `workflow_run`) → checkout of
+  the PR head → a build/test/`run:` step executes it → `EXECUTE_UNTRUSTED_CODE`
+  with base-repo secrets and a writable token → whatever that token/identity
+  reaches. Reachability is usually `direct` (any fork).
+- **Indirect PPE.** The attacker cannot edit the workflow but controls a file the
+  privileged pipeline *interprets*: a Makefile, `package.json` script, test
+  config, or a `${{ }}` expression interpolated into a shell. Same capability,
+  one hop removed. Reachability often `conditional` on the poisoned file being
+  read.
+
+Ask: which event carries secrets/a writable token? Does the controlled input
+actually execute? A fork `pull_request` (read-only token, no secrets) running
+untrusted code is normally expected and safe — that chain does not close.
+
+## workflow_run privilege bridging
+
+`workflow_run` runs trusted workflow code, but is *triggered by* another workflow
+that a fork may have influenced — and it holds secrets and a writable token the
+triggering run did not. The bridge is the data crossing between them:
+
+```
+untrusted/first workflow → {artifact, cache, metadata, outputs, PR number}
+                         → privileged workflow_run consumes it
+                         → EXECUTE_UNTRUSTED_CODE / WRITE_REPOSITORY / PUBLISH_ARTIFACT
+```
+
+Investigate: identify the triggering workflow and whether untrusted contributors
+can influence it; enumerate every artifact/output/cache/label the privileged
+`workflow_run` consumes; treat those values as attacker-controlled unless the
+privileged workflow independently validates them; then determine the capability
+available after consumption. The modern "unprivileged build produces a poisoned
+artifact → privileged release trusts it" chain lives here. A `workflow_run` that
+consumes only its own trusted outputs, or validates inputs, does not close.
+
+## Cache poisoning
+
+Actions caches are **not signed or verified**. That makes them a trust boundary
+of their own (`cache-trust-boundary`):
+
+```
+low-trust writer (fork PR job) → cache key → privileged job restores it
+                               → executable / tool / build-script / dependency runs
+                               → EXECUTE_UNTRUSTED_CODE in the privileged context
+```
+
+Ask: can low-trust code write this cache (which triggers populate the key)? Can a
+more privileged workflow later restore it? Does the restored content include
+executables, compiled tools, build scripts, or dependency directories that then
+run? A cache scoped to and written only by trusted refs does not close the chain.
+`inspect_workflows.py` surfaces `uses_cache` per job as a starting fact.
+
+## Reusable-workflow transitive trust
+
+Callers reach across a chain `A → B → C`. Permissions can only stay equal or
+decrease down the chain, so the sharper risks are **secret propagation** and
+**trusted-code identity**:
+
+- `secrets: inherit` hands the callee *every* caller secret — a broad
+  `READ_SECRET` capability transfer. Treat it as a wide blast radius and ask what
+  the callee does with those secrets and whether its code is trusted.
+- An **external or mutable reusable-workflow ref** (`owner/repo/.github/
+  workflows/x.yml@main`) means the trusted-looking call can change underneath
+  you — same class as an unpinned Action.
+- A called workflow that runs on **self-hosted** runners, or is itself reachable
+  by untrusted triggers, extends the boundary transitively.
+
+The parser reports per-job `secrets` (`"inherit"` or a name map) and `uses_pinned`
+for job-level reusable-workflow calls.
+
+## Self-hosted runner abuse
+
+Self-hosted runners are persistent and often on privileged networks. If they are
+reachable by untrusted triggers, or shared between PR workloads and
+release/deploy workloads, an attacker who achieves `EXECUTE_UNTRUSTED_CODE` gains
+persistence, lateral movement, and secret theft against everything the runner can
+reach. Correlate `self_hosted: true` with the trigger's reachability and with any
+deployment/identity capability on the same runner.
+
+## Download-and-execute
+
+A workflow that fetches code from the network and runs it is a supply-chain
+dependency even with no `uses:` — `curl … | sh`, `wget … && chmod +x`,
+`iwr … | iex`, `npm i -g`, `pip install git+…`, `go install …@latest`,
+`cargo install`. The parser flags these per run step as `fetch_execute` with a
+`fetch_execute_excerpt`. Do not treat the pattern as an automatic finding; ask:
+
+- Is the fetched content **immutable** (a digest/tag/SHA) or a moving `latest`?
+- Is its **integrity verified** (checksum, signature) before use?
+- Is it actually **executed**?
+- What **privilege** does the job hold? A release/publish job doing this
+  (`PUBLISH_ARTIFACT`, `ASSUME_EXTERNAL_IDENTITY`) is far more interesting than a
+  developer-only lint job.
+
+Immutable, verified, and low-privilege → the chain does not close.

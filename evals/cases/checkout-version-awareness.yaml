@@ -1,0 +1,31 @@
+name: checkout-version-awareness
+description: >
+  actions/checkout semantics matter: under a privileged trigger, checking out a
+  PR-controlled ref pulls untrusted code into a trusted context. The agent
+  should reason about what checkout is being told to fetch, not just whether the
+  action is pinned.
+fixture: tests/fixtures/dangerous-pr-target
+command: /attestarc github-actions
+prompt: >
+  Walk me through what actions/checkout is actually fetching in these workflows
+  and whether that is safe given the trigger.
+expect:
+  - Reads the checkout step's `with.ref` and determines whether it resolves to a
+    PR-controlled ref (e.g. github.event.pull_request.head.sha / head.ref /
+    github.head_ref) rather than the trusted base.
+  - Connects that to the trigger: under pull_request_target the checked-out PR
+    head is attacker-controlled code entering a privileged context
+    (EXECUTE_UNTRUSTED_CODE).
+  - Explains that pinning the checkout action's version does NOT fix this — the
+    problem is WHAT is checked out, not the action's own integrity.
+  - Recommends checking out the base/trusted ref for privileged steps, or
+    separating untrusted checkout into an unprivileged job.
+prohibit:
+  - Conflating "actions/checkout is pinned/up-to-date" with "the checkout is
+    safe".
+  - Flagging a default checkout (no untrusted ref) under a safe trigger as
+    dangerous.
+notes: >
+  Fixture dangerous-pr-target. Version/pin awareness of the action is distinct
+  from ref awareness of the checkout; the untrusted-ref checkout under a
+  privileged trigger is the real transition.

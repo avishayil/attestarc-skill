@@ -4,6 +4,11 @@ How the repository and its CI authenticate, and where privilege transitions
 happen. **Never** put a secret value into `findings.json` or any output — store
 only metadata (name, source, scope).
 
+Threat model: see `references/threats/identity.md` for the capability chain
+`READ_SECRET` / `REQUEST_WORKLOAD_IDENTITY` → `ASSUME_EXTERNAL_IDENTITY` and why
+the external trust policy is usually the decisive, off-repo control. This file
+teaches how to observe credentials and identity federation in this repository.
+
 ## Static credentials
 
 Look for long-lived credentials in CI and config:
@@ -33,7 +38,14 @@ GCP Workload Identity Federation, Azure federated credentials):
   `id-token: write` + a broad trust policy is a path from a fork PR to a cloud
   identity → potentially `critical`.
 - The trust policy usually lives outside the repo (in cloud IaC or the cloud
-  console). If you cannot observe it, say so and record `needs_review`.
+  console). It is the decisive control, and it is almost always an
+  **off-repo `evidence_gap`**: without it you cannot tell whether
+  `REQUEST_WORKLOAD_IDENTITY` actually reaches `ASSUME_EXTERNAL_IDENTITY` for an
+  untrusted actor. If you cannot observe it, do not resolve the chain by
+  assumption in either direction — record the transition as `needs_review` and
+  name exactly what you need (the IAM role trust JSON, the WIF pool/provider
+  condition, the Azure federated-credential subject). If the cloud IaC *is* in
+  this repo, read it and cite the subject conditions as evidence.
 
 ## Secret scope
 
@@ -42,6 +54,13 @@ GCP Workload Identity Federation, Azure federated credentials):
 - Note when secrets are available to workflows triggered by untrusted actors, or
   shared across PR and release workloads.
 - Organization secrets exposed to all repositories widen blast radius.
+- **Effective fork-PR reachability is a server-side setting.** Under the platform
+  default a fork `pull_request` gets no secrets, but the repo/org options that
+  send write tokens or secrets to fork PRs (and `secrets: inherit` into reusable
+  workflows) can widen this — you cannot see it in the workflow file. Correlate
+  with `references/github-actions.md` and `references/github.md`; if the effective
+  setting is unverifiable, treat "a fork PR can read this secret" as
+  `needs_review` with an `evidence_gap`, not a confident critical or a dismissal.
 
 ## Recording
 

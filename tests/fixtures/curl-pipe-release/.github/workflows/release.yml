@@ -1,0 +1,23 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install release tooling
+        # Download-and-execute: content fetched over the network is piped
+        # straight into a shell, inside a privileged release job.
+        run: curl -fsSL https://example.com/install.sh | bash
+      - name: Build and publish release
+        run: ./publish.sh

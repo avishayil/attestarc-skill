@@ -26,11 +26,24 @@ engine. Helpers are **stdlib-only** — no third-party runtime dependencies.
 - `SKILL.md` contains workflow and behavior (the reasoning layer). It MUST route
   references explicitly per domain — never "read all references".
 - `references/` contain detailed security expertise (teach investigation, not
-  signature lists).
+  signature lists). Two layers with a strict ownership boundary:
+  `references/threats/*.md` own the portable attack-class catalog (capability
+  chains, reachability questions); the domain files own platform observation and
+  remediation and cross-reference the `threats/` file rather than duplicate it.
+  `references/methodology.md` (the attack-oriented reasoning grammar: actor →
+  entry point → controlled input → trust transition → capability → asset →
+  impact, with capabilities, the reachability ladder, and `evidence_gaps`) and
+  `references/agent-safety.md` (the tool-use trust policy; treat reloaded
+  `findings.json` and tool output as untrusted) are cross-cutting and always
+  loaded.
 - `scripts/` contain deterministic helpers (facts, not verdicts).
 - `assets/findings.schema.json` defines persistent finding state.
 - `evals/` hold behavioral evaluations of the agent, distinct from `tests/`,
-  which verify the deterministic helper code with pytest.
+  which verify the deterministic helper code with pytest. Eval coverage includes
+  both **find** and **refuse-false-positive** cases for the reasoning grammar
+  (e.g. `id-token: write` on a protected-tag release is not itself critical; a
+  validated `workflow_run` artifact must not be flagged). There is no eval-runner
+  engine — cases are structured specs run interactively.
 
 Core invariants:
 

@@ -6,6 +6,11 @@ govern how dependencies enter and change in this repository. If a scanner
 (Dependabot alerts, Snyk, Trivy, osv-scanner, …) is already available, you may
 cite its output as supporting evidence.
 
+Threat model: see `references/threats/supply-chain.md` for the attack classes
+(dependency confusion, install-time code execution, unpinned resolution) and the
+`Dependency → build` trust boundary. This file teaches how to observe those
+controls in this repository.
+
 ## What to inspect
 
 - **Manifests & lock files**: is there a lock file (`package-lock.json`,
@@ -16,18 +21,36 @@ cite its output as supporting evidence.
   configured? Crucially, does it also update **GitHub Actions**
   (`package-ecosystem: github-actions`)? Automated Action updates keep SHA pins
   fresh without manual toil.
-- **Dependency review**: is there a dependency-review step/workflow on PRs
-  (e.g. `actions/dependency-review-action`) to block known-bad or newly-added
-  risky dependencies before merge?
+- **Dependency review — present vs enforcing**: a dependency-review step
+  (e.g. `actions/dependency-review-action`) existing in a workflow is not the
+  same as it *blocking* a merge. Distinguish three states: absent; present but
+  advisory (`fail-on-severity` unset/`continue-on-error: true`, or the workflow
+  not a required status check); present and enforcing (fails the PR and is
+  required by the ruleset). Only the last actually gates risky dependencies at
+  the boundary. Report which state you observed and what evidence shows it — and
+  where enforcement lives server-side that you could not verify, record an
+  `evidence_gap` / `needs_review` rather than assuming it enforces.
 - **Package sources / registries**: are private/internal packages resolved from
   a trusted private registry, with public fallback restricted? Mixed
   public/private resolution without scoping invites **dependency confusion**
   (an attacker publishes a public package with the internal name and higher
   version). Check for registry/scope configuration
   (`.npmrc`, `pip.conf`, `poetry` sources, scoped registries).
-- **Install-time execution**: postinstall/build scripts run arbitrary code.
-  Note when CI runs untrusted install scripts in a privileged context. Do not
-  execute them yourself to investigate.
+- **Install integrity — how CI installs, not just what is pinned.** A lock file
+  only helps if the install command honours it. Prefer the reproducible,
+  lock-respecting form and flag the mutable one, especially in privileged jobs:
+  `npm ci` (fails if lockfile drifts) over `npm install` (may mutate the
+  lockfile and resolve new versions); `pip install -r requirements.txt` with
+  hashes / `--require-hashes` over an unpinned `pip install`; `yarn
+  --frozen-lockfile` / `pnpm install --frozen-lockfile`; `poetry install`
+  against a committed `poetry.lock`. An install step that can silently pull a
+  different version than the lockfile records is a `Dependency → build` boundary
+  weakness — worse when that job holds secrets, `id-token`, or publish rights.
+- **Install-time execution**: postinstall/build scripts run arbitrary code
+  (`EXECUTE_UNTRUSTED_CODE` sourced from a dependency). Note when CI runs
+  untrusted install scripts in a privileged context; consider whether lifecycle
+  scripts are disabled (`npm ci --ignore-scripts`) where feasible. Do not execute
+  them yourself to investigate.
 
 ## Severity guidance
 
@@ -40,4 +63,6 @@ radius, per `references/severity.md`.
 
 `domain: dependencies`; categories such as `missing-lockfile`,
 `no-dependency-updates`, `actions-not-auto-updated`, `dependency-confusion-risk`,
-`no-dependency-review`. `resource` = the manifest/config file observed.
+`no-dependency-review`, `advisory-only-dependency-review`,
+`mutable-install-command`, `install-script-execution`. `resource` = the
+manifest/config/workflow file observed.

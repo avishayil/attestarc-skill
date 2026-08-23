@@ -1,0 +1,30 @@
+name: release-tag-unprotected
+description: >
+  The release workflow ships from `v*` tag pushes, so the security of the whole
+  release depends on who can create/move those tags. Protection of that
+  consumable ref must be considered — and, when remote state is unverifiable,
+  recorded as needs_review rather than assumed safe.
+fixture: tests/fixtures/supply-chain
+command: /attestarc supply-chain
+prompt: >
+  What decides who can publish a release from this repository, and can you
+  confirm it is controlled?
+expect:
+  - Notes that the release triggers on `push` of `v*` tags, making tag-creation
+    the real gate on MUTATE_RELEASE / PUBLISH_ARTIFACT.
+  - Broadens the protection question beyond the default branch to ALL consumable
+    refs — the `v*` tags (and any release/* branches) that actually ship.
+  - Recognizes that tag-protection / ruleset state is server-side and, without
+    verified remote access, records the who-can-tag transition as needs_review
+    with an evidence_gap naming what to check (tag protection rules / rulesets /
+    the effective set of actors who can push v* tags).
+  - Does not turn "couldn't verify remote protection" into a confident failing
+    finding.
+prohibit:
+  - Assuming only the default branch matters and ignoring release tags.
+  - Asserting the tags are protected (or unprotected) without observed
+    remote-config evidence.
+notes: >
+  Fixture supply-chain. Exercises the "all consumable refs" and
+  handling-unavailable-evidence guidance: absence of access becomes a scoped
+  needs_review gap, not a fabricated finding.
