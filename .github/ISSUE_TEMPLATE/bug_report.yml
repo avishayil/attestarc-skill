@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a defect in AttestArc's helpers, references, or skill behavior
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report.
+
+        **Do not report security vulnerabilities here.** Use the private
+        advisories flow described in [SECURITY.md](../blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the defect and what you expected instead.
+      placeholder: When I run `/attestarc ...`, AttestArc ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Exact steps. If a deterministic helper is involved, include the command
+        (e.g. `python scripts/inspect_workflows.py`) and, if possible, a minimal
+        input file. Do not paste secrets.
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: component
+    attributes:
+      label: Component
+      description: Which part is affected?
+      placeholder: "scripts/inspect_workflows.py, references/github-actions.md, SKILL.md, installer, ..."
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Host agent and version, OS, Python version (`python --version`), AttestArc version (`metadata.version` in SKILL.md).
+      placeholder: |
+        Host: Claude Code x.y
+        OS: macOS 14
+        Python: 3.12
+        AttestArc: 0.2.0
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Command output or error text. Redact any secret values or private data.
+      render: text
+    validations:
+      required: false

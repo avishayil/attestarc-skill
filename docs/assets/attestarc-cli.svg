@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" width="900" height="560" role="img" aria-labelledby="cliTitle cliDesc" font-family="'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">
+  <title id="cliTitle">AttestArc running the /attestarc command in a coding agent</title>
+  <desc id="cliDesc">A terminal window shows the /attestarc command producing a HIGH-severity finding (AA-GHA-81F21C): a mutable action reference in the release workflow, with observed evidence, why it matters, the recommended fix, and a suggested next step.</desc>
+
+  <defs>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0EA5E9" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#0EA5E9" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- window -->
+  <rect x="8" y="8" width="884" height="544" rx="16" fill="#0B1220" stroke="#1E293B" stroke-width="1.5"/>
+  <rect x="8" y="8" width="884" height="120" rx="16" fill="url(#glow)"/>
+
+  <!-- title bar -->
+  <circle cx="36" cy="40" r="6.5" fill="#334155"/>
+  <circle cx="58" cy="40" r="6.5" fill="#334155"/>
+  <circle cx="80" cy="40" r="6.5" fill="#334155"/>
+  <text x="450" y="45" text-anchor="middle" font-size="14" fill="#64748B">attestarc — Claude Code</text>
+  <line x1="8" y1="68" x2="892" y2="68" stroke="#1E293B" stroke-width="1.5"/>
+
+  <!-- body -->
+  <g font-size="16">
+    <!-- prompt -->
+    <text x="36" y="112"><tspan fill="#38BDF8" font-weight="700">❯</tspan><tspan fill="#E2E8F0" xml:space="preserve">  </tspan><tspan fill="#F8FAFC" font-weight="700">/attestarc</tspan></text>
+
+    <text x="36" y="150" fill="#94A3B8">Assessing repository and delivery chain…</text>
+
+    <!-- severity chip + id -->
+    <rect x="36" y="192" width="66" height="26" rx="6" fill="#F59E0B" fill-opacity="0.16" stroke="#F59E0B" stroke-opacity="0.5"/>
+    <text x="69" y="210" text-anchor="middle" font-size="13" font-weight="700" fill="#FBBF24" letter-spacing="0.5">HIGH</text>
+    <text x="116" y="211" fill="#CBD5E1" font-weight="600">AA-GHA-81F21C</text>
+
+    <text x="36" y="248" fill="#F8FAFC" font-weight="600">Mutable action reference in release workflow</text>
+
+    <!-- detail rows -->
+    <g font-size="15">
+      <text x="52" y="288"><tspan fill="#64748B">Observed</tspan><tspan fill="#CBD5E1" dx="30">release.yml uses actions/checkout@v4 — a moving tag</tspan></text>
+      <text x="52" y="316"><tspan fill="#64748B">Impact</tspan><tspan fill="#CBD5E1" dx="46">a moved tag can run attacker code with packages: write</tspan></text>
+      <text x="52" y="344"><tspan fill="#64748B">Fix</tspan><tspan fill="#CBD5E1" dx="70">pin to the reviewed full commit SHA</tspan></text>
+    </g>
+
+    <line x1="36" y1="380" x2="864" y2="380" stroke="#1E293B" stroke-width="1.5" stroke-dasharray="4 6"/>
+
+    <!-- next step -->
+    <text x="36" y="418"><tspan fill="#64748B">next</tspan><tspan fill="#38BDF8" dx="24" font-weight="600">/attestarc fix AA-GHA-81F21C</tspan></text>
+
+    <!-- resolved echo -->
+    <text x="36" y="470"><tspan fill="#22C55E" font-weight="700">✓</tspan><tspan fill="#94A3B8" dx="14">verified: reference now immutable — finding resolved</tspan></text>
+
+    <!-- caret -->
+    <text x="36" y="512"><tspan fill="#38BDF8" font-weight="700">❯</tspan><tspan fill="#F8FAFC" dx="18">▌</tspan></text>
+  </g>
+</svg>
