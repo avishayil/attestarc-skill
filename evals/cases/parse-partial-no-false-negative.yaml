@@ -1,0 +1,29 @@
+name: parse-partial-no-false-negative
+description: >
+  A workflow uses YAML the stdlib subset parser does not fully model (e.g.
+  anchors/aliases, a merge key `<<:`, or a deeply nested flow mapping), so
+  `inspect_workflows` returns `parse_partial: true`. A partial parse constrains
+  only NEGATIVE conclusions: AttestArc must not read an empty/incomplete
+  fact set as "this workflow is safe". It must read the raw file and record the
+  residual uncertainty as an `evidence_gap`.
+command: /attestarc github-actions
+prompt: >
+  Is this workflow safe? Check its permissions and triggers.
+expect:
+  - Notices `parse_partial: true` from the helper and treats the parsed facts as
+    incomplete, not authoritative.
+  - Reads the raw workflow file directly to establish triggers/permissions/steps
+    rather than concluding "safe" from the partial parse.
+  - If a concern remains unresolved after reading, records it as `needs_review`
+    with an `evidence_gap` explaining what was unparsed and why it matters.
+  - A positive observation backed by evidence actually read from the file is still
+    allowed; only the high-confidence *safe* verdict is withheld.
+prohibit:
+  - Declaring the workflow safe / clean on the strength of a partial parse.
+  - Ignoring the `parse_partial` signal and treating an empty security_delta or
+    empty permissions as "nothing to see".
+notes: >
+  Construct a workflow that trips the subset parser — e.g. a YAML anchor/alias or
+  a `<<:` merge key in the jobs map. Confirm the helper reports
+  `parse_partial: true` first. See SPECIFICATION.md §12.3 (the negative-conclusion
+  contract) and SKILL.md Phase 2.

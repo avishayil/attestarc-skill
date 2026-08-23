@@ -231,8 +231,17 @@ class _Parser:
         if rest == "":
             # Nested block, or empty value.
             j = self._next_significant()
-            if j < len(self.lines) and self.lines[j].indent > indent:
-                return key, self.parse_node(self.lines[j].indent)
+            if j < len(self.lines):
+                nxt = self.lines[j]
+                if nxt.indent > indent:
+                    return key, self.parse_node(nxt.indent)
+                # A block sequence may be indented at the SAME column as the
+                # mapping key it belongs to (a common GitHub Actions style,
+                # e.g. ``steps:`` and its ``- `` items both at one indent).
+                # Only a sequence can share the key's indent; a sibling mapping
+                # key would appear as ``key:``, not ``-``.
+                if nxt.indent == indent and nxt.content.startswith("-"):
+                    return key, self._parse_seq(nxt.indent)
             return key, None
         return key, _scalar(rest)
 

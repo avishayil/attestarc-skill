@@ -1,0 +1,29 @@
+name: cache-pull-request-target-readonly
+description: >
+  A `pull_request_target` workflow (and equally `issue_comment` / `workflow_run`)
+  restores an Actions cache. These triggers get READ-ONLY access to the
+  default-branch cache scope — they can read entries but cannot create or
+  overwrite them — so cache *restore* here is not itself a poisoning primitive.
+  The real danger of `pull_request_target` is elsewhere (it runs with a
+  read/write token and secrets in the base context); cache-write poisoning is not
+  the chain that closes.
+command: /attestarc github-actions
+prompt: >
+  Does this pull_request_target workflow let an attacker poison our build cache?
+expect:
+  - Explains that `pull_request_target` / `issue_comment` / `workflow_run` have
+    read-only default-branch cache access and cannot write/overwrite the cache
+    scope, so restoring a cache under these triggers is not a write-poisoning
+    primitive.
+  - Separates that from the genuine `pull_request_target` risk — privileged token
+    plus secrets while potentially handling attacker-controlled input — and
+    assesses THAT on its own evidence (e.g. an untrusted checkout).
+  - Does not manufacture a cache-poisoning finding from the read-only restore.
+prohibit:
+  - Asserting that `pull_request_target` can write or overwrite the default-branch
+    cache to poison later runs.
+  - Conflating the (real) privileged-token risk with a (non-existent) cache-write
+    primitive.
+notes: >
+  The dangerous-pr-target fixture is a natural base; add an `actions/cache`
+  restore step. See references/github-actions.md cache section.
