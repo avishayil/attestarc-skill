@@ -3,6 +3,72 @@
 All notable changes to AttestArc are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-08-23
+
+**Public Preview — GitHub & GitHub Actions.** A correctness pass on top of 0.4.0,
+driven by a second external review. No new platforms, no restructure, helpers
+stay stdlib-only at runtime. It closes two ways the reasoning could over-flag
+High/Critical, tightens the `state.py` trust boundary, and fixes schema-v3
+implementation bugs.
+
+### Fixed
+
+- **`actions/checkout` fork-PR refusal is now in the reasoning.** Modern
+  `actions/checkout` refuses to check out a fork PR head under
+  `pull_request_target` / `workflow_run` unless `allow-unsafe-pr-checkout: true`.
+  `inspect_workflows.py` emits `checkout_refs[]` facts for this
+  (`allow_unsafe_pr_checkout`, `persist_credentials`, the checkout Action
+  `action_ref`/`action_ref_kind`/`action_pinned`, and the requested `ref`), and
+  `references/github-actions.md` teaches the down-gate: a default checkout is not
+  an automatic CRITICAL — the finding turns on the toggle and the checkout
+  version, and on whether untrusted code enters another way.
+- **SHA-pinning down-gate no longer over-generalizes.** An enforced require-SHA
+  Actions policy down-gates a movable **Action** ref (`step.uses`) but does **not**
+  apply to **reusable-workflow** refs (`job.uses:` `…/x.yml@v3`), which may still
+  use a tag — so a mutable reusable-workflow ref stays a live drift finding under
+  the policy (`SKILL.md` Phase 4, `SPECIFICATION §8.2`).
+- **Schema v3 bugs.** Findings schema `$id` corrected to `findings-3.json`;
+  `expires_at` on an `accepted_risk` finding is now enforced — a lapsed acceptance
+  surfaces an `effective_status` of `open` in `list`/`get` while the stored status
+  is left untouched; `type` is refreshed on re-upsert so a finding can evolve
+  (`hardening → attack-path`); a real load-time `schema_version < 3` → 3 migration
+  (flat acceptance fields → `risk_acceptance`, untyped `related_findings` → typed
+  links) runs in memory and persists only on the next mutating save; and
+  `validate_state` now enforces the closed v3 structures (unknown-key rejection,
+  type/relationship/reachability/evidence-type/safety-event enums).
+
+### Changed
+
+- **`state.py` read boundary + explicit `--root` for mutations.** Reloads of
+  `findings.json`, corrupt-JSON recovery writes, and any `upsert` finding-input
+  file are now routed through `_pathsafe.safe_read_text`, so a symlinked/absolute/
+  `..` path escaping `--root` is refused for reads exactly as it already was for
+  writes. The mutating commands (`init`, `upsert`, `set-status`, `resolve`,
+  `record-safety-event`) now require an explicit `--root`; read-only commands may
+  still infer it. The trust boundary is code-enforced, not prompt-enforced.
+- **`record-safety-event` takes JSON on stdin and hashes by default.**
+  `record-safety-event -` reads the event payload as JSON on stdin so untrusted
+  injected text never rides the shell command line; it stores a `content_hash`
+  (sha256) plus metadata by default, and persists a raw `excerpt` only when
+  explicitly supplied as already-sanitized inert data (`assets/findings.schema.json`
+  gains `content_hash`).
+- **Cache poisoning stated as a write-scope decision tree.**
+  `references/github-actions.md` now spells out that low-trust triggers
+  (`pull_request_target`, `issue_comment`, `workflow_run`) get **read-only** cache
+  access and that only seven triggers (`push`, `workflow_dispatch`,
+  `repository_dispatch`, `delete`, `registry_package`, `page_build`, `schedule`)
+  write the default-branch scope; fork `pull_request` is confined to its own
+  merge-ref scope. `references/threats/ci-cd-threats.md` defers to it and no longer
+  makes trigger-specific claims.
+- **SLSA Source v1.2 wording.** `references/threats/source-integrity.md` restates
+  the ladder to spec — L2 is History **& source provenance** (SCS-issued source
+  provenance attestations, not merely authenticated history), L3 is continuous
+  technical controls **with evidence**.
+- **Self-hosted runner framing.** `references/threats/ci-cd-threats.md` no longer
+  opens by asserting self-hosted runners are persistent/privileged; `self-hosted:
+  true` is the observation that prompts lifecycle / tenancy / segmentation
+  questions, deferring to the runner model in `references/github-actions.md`.
+
 ## [0.4.0] — 2026-08-23
 
 **Public Preview — GitHub & GitHub Actions.** A correctness-and-precision pass

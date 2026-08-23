@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "repository": {
+    "root": ".",
+    "scm": "github",
+    "remote": "avishayil/example"
+  },
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-01T00:00:00Z",
+  "findings": []
+}

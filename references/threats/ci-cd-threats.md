@@ -69,14 +69,17 @@ low-trust writer (a run an untrusted actor can influence)
 
 The load-bearing question is **scope**: caches are keyed *and scoped*, and a
 privileged run only restores from scopes it is allowed to read. Ask: can low-trust
-code write a cache **in a scope the privileged job restores from** (not merely
+code **write** a cache **in a scope the privileged job restores from** (not merely
 write *some* cache)? Can that privileged workflow later restore it? Does the
 restored content include executables, compiled tools, build scripts, or dependency
 directories that then run? A cache written only by trusted refs, or in a scope the
 privileged run never reads, does not close the chain — an isolated fork-PR scope
-is the common example (see `references/github-actions.md` for GitHub's exact scope
-and fallback rules). `inspect_workflows.py` surfaces `uses_cache` per job as a
-starting fact.
+is the common example. **Which actors/triggers can actually write a given scope is
+platform-specific** — on GitHub the write-capable set is narrow and several
+low-trust triggers get read-only cache access, so verify the writer against
+`references/github-actions.md` (cache write-scope decision tree) before assuming a
+low-trust run can poison anything. `inspect_workflows.py` surfaces `uses_cache`
+per job as a starting fact.
 
 ## Reusable-workflow transitive trust
 
@@ -98,12 +101,21 @@ for job-level reusable-workflow calls.
 
 ## Self-hosted runner abuse
 
-Self-hosted runners are persistent and often on privileged networks. If they are
-reachable by untrusted triggers, or shared between PR workloads and
-release/deploy workloads, an attacker who achieves `EXECUTE_UNTRUSTED_CODE` gains
-persistence, lateral movement, and secret theft against everything the runner can
-reach. Correlate `self_hosted: true` with the trigger's reachability and with any
-deployment/identity capability on the same runner.
+`self_hosted: true` is the *observation that prompts questions*, not a verdict —
+it does not by itself mean "persistent" or "privileged network". Blast radius is
+set by separable properties the label alone rarely answers: **lifecycle**
+(ephemeral, fresh per job, vs a long-lived host that reuses filesystem and
+credentials), **tenancy/scope** (a runner group scoped to one trusted repo vs an
+org-wide group a fork PR can land on), and **network segmentation** (what the
+runner can reach — production, cloud metadata, internal services). The serious
+pattern is running **untrusted contributions** on a **persistent,
+broadly-scoped, poorly-segmented** runner, or sharing one between PR and
+release/deploy workloads: an attacker who achieves `EXECUTE_UNTRUSTED_CODE` there
+gains persistence, lateral movement, and secret theft against everything the
+runner reaches. Correlate `self_hosted: true` with the trigger's reachability and
+any deployment/identity capability on the same runner, and record the unknown
+properties as `evidence_gaps`. See `references/github-actions.md` (Runners) for
+the observation model on GitHub.
 
 ## Download-and-execute
 

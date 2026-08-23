@@ -297,6 +297,47 @@ def test_dangerous_pr_target_correlated_facts(fixtures_dir):
     assert "github.event.pull_request.title" in untrusted
 
 
+def test_checkout_facts_emit_safety_toggles_and_version(fixtures_dir):
+    # allow-unsafe-pr-checkout: true re-enables fork-PR checkout under a
+    # privileged trigger; the inspector must surface it as a fact (not a verdict)
+    # alongside the pinned checkout version so the host can reason about the
+    # platform's default refusal.
+    wf = iw.inspect_workflow_text(
+        "on: pull_request_target\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "        with:\n"
+        "          ref: ${{ github.event.pull_request.head.sha }}\n"
+        "          allow-unsafe-pr-checkout: true\n"
+        "          persist-credentials: false\n",
+        "ci.yml",
+    )
+    co = wf["jobs"][0]["checkout_refs"][0]
+    assert co["allow_unsafe_pr_checkout"] is True
+    assert co["persist_credentials"] is False
+    assert co["references_untrusted_ref"] is True
+    assert co["action_ref"] == "v4"
+    assert co["action_ref_kind"] == "movable"
+    assert co["action_pinned"] is False
+
+
+def test_default_checkout_emits_no_ref_facts(fixtures_dir):
+    # A plain default checkout (no with:) is the safe default; nothing notable.
+    wf = iw.inspect_workflow_text(
+        "on: pull_request_target\n"
+        "jobs:\n"
+        "  build:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n",
+        "ci.yml",
+    )
+    assert wf["jobs"][0]["checkout_refs"] == []
+
+
 def test_excessive_permissions_and_self_hosted(fixtures_dir):
     wf = inspect_fixture(fixtures_dir, "excessive-permissions")[0]
     assert wf["permissions"] == "write-all"

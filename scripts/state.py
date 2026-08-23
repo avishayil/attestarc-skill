@@ -39,7 +39,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
-from _pathsafe import resolve_within_root
+from _pathsafe import PathEscapeError, resolve_within_root, safe_read_text
 
 # Bumped to 3 in v0.4.0: finding.type taxonomy; risk_acceptance nested object
 # (replaces flat accepted_by/reason/accepted_at) with an expires_at; typed
@@ -50,7 +50,7 @@ SCHEMA_VERSION = 3
 
 # AttestArc version stamped onto findings as provenance (assessment_version).
 # Bump in lockstep with pyproject/SKILL.md at each release.
-ASSESSMENT_VERSION = "0.4.0"
+ASSESSMENT_VERSION = "0.4.1"
 
 # Persisted string leaves are capped so a hostile tool result cannot turn
 # durable state into a multi-megabyte prompt-injection payload.
@@ -320,21 +320,85 @@ def _backup_corrupt(path: str) -> str:
     return candidate
 
 
-def load_state(path: str, *, recover: bool = True) -> dict:
-    """Load state. On corrupt JSON, back it up and reinitialize (if recover)."""
+def _migrate_state(state: dict) -> dict:
+    """Migrate an older on-disk state to the current schema, in memory.
+
+    Applied on load so a v1/v2 ``findings.json`` keeps working; the migrated
+    shape is persisted only on the next mutating save, so a read-only command
+    stays read-only. Idempotent — ids and fingerprints are never changed.
+
+    v2 -> v3:
+
+    * flat ``accepted_by`` / ``reason`` / ``accepted_at`` on an accepted finding
+      fold into a nested ``risk_acceptance`` object;
+    * untyped ``related_findings: [str]`` become
+      ``[{id, relationship: "contributes_to"}]``.
+    """
+    version = state.get("schema_version")
+    if not isinstance(version, int) or version >= SCHEMA_VERSION:
+        return state
+
+    for f in state.get("findings", []):
+        if not isinstance(f, dict):
+            continue
+        # Flat acceptance fields -> nested risk_acceptance object.
+        if not isinstance(f.get("risk_acceptance"), dict):
+            flat: dict = {}
+            for k in ("accepted_by", "accepted_at"):
+                if k in f:
+                    flat[k] = f.pop(k)
+            # ``reason`` belongs to the acceptance only when this WAS one.
+            if (flat or f.get("status") == "accepted_risk") and "reason" in f:
+                flat["reason"] = f.pop("reason")
+            if flat:
+                f["risk_acceptance"] = flat
+        # Untyped related_findings (list of id strings) -> typed links.
+        rel = f.get("related_findings")
+        if isinstance(rel, list) and any(isinstance(x, str) for x in rel):
+            f["related_findings"] = [
+                {"id": x, "relationship": "contributes_to"}
+                if isinstance(x, str) else x
+                for x in rel
+            ]
+        # Mark the version that last touched the (migrated) finding.
+        f.setdefault("assessment_version", ASSESSMENT_VERSION)
+
+    state["schema_version"] = SCHEMA_VERSION
+    return state
+
+
+def load_state(path: str, *, recover: bool = True, root: str | None = None) -> dict:
+    """Load state. On corrupt JSON, back it up and reinitialize (if recover).
+
+    When ``root`` is supplied the read is confined to it (the repository under
+    assessment is untrusted input: a symlinked/absolute/``..`` ``findings.json``
+    must never let AttestArc read outside the assessed root). Older schema
+    versions are migrated in memory via :func:`_migrate_state`.
+    """
     if not os.path.exists(path):
         raise StateError(
             f"{path} does not exist. Run 'state.py init' first."
         )
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        if root is not None:
+            raw = safe_read_text(path, root)
+        else:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = fh.read()
+        data = json.loads(raw)
+    except PathEscapeError as exc:
+        raise StateError(
+            f"refusing to read outside the repository root: {exc}. This happens "
+            "when findings.json (or a parent) is a symlink escaping the "
+            "repository; the repository is untrusted input and cannot redirect "
+            "AttestArc's reads."
+        ) from exc
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         if not recover:
             raise StateError(f"{path} is not valid JSON: {exc}") from exc
         backup = _backup_corrupt(path)
         state = _empty_state()
-        save_state(state, path)
+        save_state(state, path, root=root)
         sys.stderr.write(
             f"warning: {path} was corrupt ({exc}); backed up to {backup} and "
             f"reinitialized.\n"
@@ -342,14 +406,52 @@ def load_state(path: str, *, recover: bool = True) -> dict:
         return state
     if not isinstance(data, dict):
         raise StateError(f"{path} does not contain a JSON object.")
-    return data
+    return _migrate_state(data)
 
 
 # --------------------------------------------------------------------------- #
 # Validation (hand-rolled; no jsonschema dependency)
 # --------------------------------------------------------------------------- #
+# Closed vocabularies and key sets mirroring assets/findings.schema.json. Kept
+# here (not read from the schema) so validation stays stdlib-only and cannot be
+# steered by a tampered schema file. A parity test asserts they match the schema.
+FINDING_TYPES = ("exposure", "attack-path", "hardening")
+RELATIONSHIPS = ("contributes_to", "superseded_by", "duplicate_of")
+REACHABILITY = ("direct", "conditional", "trusted-only", "unknown")
+EVIDENCE_TYPES = (
+    "repository-file", "git-diff", "remote-config", "tool-output", "inference",
+)
+
+_TOPLEVEL_KEYS = frozenset({
+    "schema_version", "repository", "created_at", "updated_at", "findings",
+    "assessor_safety_events", "extensions",
+})
+_FINDING_KEYS = frozenset({
+    "id", "fingerprint", "domain", "category", "type", "resource", "subject",
+    "condition", "title", "severity", "confidence", "status", "first_seen",
+    "last_seen", "observed_at", "source_revision", "last_verified_at",
+    "assessment_version", "evidence", "impact", "threat", "trust_boundary",
+    "related_findings", "remediation", "verification", "risk_acceptance",
+    "extensions",
+})
+_RELATED_KEYS = frozenset({"id", "relationship"})
+_RISK_ACCEPTANCE_KEYS = frozenset({
+    "accepted_by", "reason", "accepted_at", "expires_at", "extensions",
+})
+_SAFETY_EVENT_KEYS = frozenset({
+    "source", "detected_at", "location", "excerpt", "content_hash",
+    "action_taken", "extensions",
+})
+_ID_RE = re.compile(r"AA-[A-Z]{2,4}-[0-9A-F]{8}")
+
+
 def validate_state(state: dict) -> list[str]:
-    """Return a list of human-readable validation errors ([] if valid)."""
+    """Return a list of human-readable validation errors ([] if valid).
+
+    findings.json is untrusted input on reload, so the closed v3 structures are
+    enforced here (unknown keys, enums, typed links). Graceful: never raises on
+    malformed input — every problem becomes an error string.
+    """
     errors: list[str] = []
 
     def err(msg: str) -> None:
@@ -360,10 +462,15 @@ def validate_state(state: dict) -> list[str]:
     for key in ("repository", "created_at", "updated_at", "findings"):
         if key not in state:
             err(f"missing top-level key: {key}")
+    for key in state:
+        if key not in _TOPLEVEL_KEYS:
+            err(f"unknown top-level key: {key}")
 
     repo = state.get("repository")
     if not isinstance(repo, dict) or "root" not in repo:
         err("repository must be an object containing 'root'")
+
+    _validate_safety_events(state.get("assessor_safety_events"), err)
 
     findings = state.get("findings")
     if not isinstance(findings, list):
@@ -381,9 +488,12 @@ def validate_state(state: dict) -> list[str]:
                     "last_seen", "evidence"):
             if key not in f:
                 err(f"{where} missing required field: {key}")
+        for key in f:
+            if key not in _FINDING_KEYS:
+                err(f"{where} has unknown field: {key}")
         fid = f.get("id")
         if isinstance(fid, str):
-            if not re.fullmatch(r"AA-[A-Z]{2,4}-[0-9A-F]{8}", fid):
+            if not _ID_RE.fullmatch(fid):
                 err(f"{where}.id has invalid format: {fid!r}")
             if fid in seen_ids:
                 err(f"{where}.id is duplicated: {fid}")
@@ -399,14 +509,91 @@ def validate_state(state: dict) -> list[str]:
             err(f"{where}.confidence invalid: {f.get('confidence')!r}")
         if f.get("status") not in STATUSES:
             err(f"{where}.status invalid: {f.get('status')!r}")
+        if "type" in f and f.get("type") not in FINDING_TYPES:
+            err(f"{where}.type invalid: {f.get('type')!r}")
         if not isinstance(f.get("evidence"), list):
             err(f"{where}.evidence must be an array")
         else:
+            for j, ev in enumerate(f["evidence"]):
+                if not isinstance(ev, dict):
+                    err(f"{where}.evidence[{j}] must be an object")
+                elif ev.get("type") not in EVIDENCE_TYPES:
+                    err(f"{where}.evidence[{j}].type invalid: {ev.get('type')!r}")
             try:
                 _assert_no_secrets(f)
             except StateError as exc:
                 err(f"{where}: {exc}")
+        _validate_related_findings(f.get("related_findings"), where, err)
+        _validate_risk_acceptance(f.get("risk_acceptance"), where, err)
+        _validate_threat(f.get("threat"), where, err)
     return errors
+
+
+def _validate_related_findings(rel, where: str, err) -> None:
+    if rel is None:
+        return
+    if not isinstance(rel, list):
+        err(f"{where}.related_findings must be an array")
+        return
+    for j, item in enumerate(rel):
+        at = f"{where}.related_findings[{j}]"
+        if not isinstance(item, dict):
+            err(f"{at} must be an object {{id, relationship}}")
+            continue
+        for key in item:
+            if key not in _RELATED_KEYS:
+                err(f"{at} has unknown field: {key}")
+        rid = item.get("id")
+        if not isinstance(rid, str) or not _ID_RE.fullmatch(rid):
+            err(f"{at}.id has invalid format: {rid!r}")
+        if item.get("relationship") not in RELATIONSHIPS:
+            err(f"{at}.relationship invalid: {item.get('relationship')!r}")
+
+
+def _validate_risk_acceptance(ra, where: str, err) -> None:
+    if ra is None:
+        return
+    if not isinstance(ra, dict):
+        err(f"{where}.risk_acceptance must be an object")
+        return
+    for key in ra:
+        if key not in _RISK_ACCEPTANCE_KEYS:
+            err(f"{where}.risk_acceptance has unknown field: {key}")
+
+
+def _validate_threat(threat, where: str, err) -> None:
+    if threat is None:
+        return
+    if not isinstance(threat, dict):
+        err(f"{where}.threat must be an object")
+        return
+    reach = threat.get("reachability")
+    if reach is not None and reach not in REACHABILITY:
+        err(f"{where}.threat.reachability invalid: {reach!r}")
+
+
+def _validate_safety_events(events, err) -> None:
+    if events is None:
+        return
+    if not isinstance(events, list):
+        err("assessor_safety_events must be an array")
+        return
+    for i, ev in enumerate(events):
+        at = f"assessor_safety_events[{i}]"
+        if not isinstance(ev, dict):
+            err(f"{at} must be an object")
+            continue
+        for key in ev:
+            if key not in _SAFETY_EVENT_KEYS:
+                err(f"{at} has unknown field: {key}")
+        if ev.get("source") not in _SAFETY_SOURCES:
+            err(f"{at}.source invalid: {ev.get('source')!r}")
+        if "detected_at" not in ev:
+            err(f"{at} missing required field: detected_at")
+        try:
+            _assert_no_secrets(ev)
+        except StateError as exc:
+            err(f"{at}: {exc}")
 
 
 # --------------------------------------------------------------------------- #
@@ -510,7 +697,7 @@ def upsert_finding(state: dict, finding: dict) -> tuple[dict, bool]:
             for key in ("title", "severity", "confidence", "impact",
                         "remediation", "verification", "category", "domain",
                         "resource", "subject", "condition", "threat",
-                        "trust_boundary", "related_findings"):
+                        "trust_boundary", "related_findings", "type"):
                 if key in incoming:
                     merged[key] = incoming[key]
             merged["evidence"] = _merge_evidence(
@@ -545,6 +732,53 @@ def find_by_id(state: dict, fid: str) -> dict | None:
         if f.get("id") == fid:
             return f
     return None
+
+
+def _parse_iso(ts) -> datetime | None:
+    """Best-effort parse of an ISO-8601 timestamp (tolerates a trailing ``Z``)."""
+    if not isinstance(ts, str) or not ts.strip():
+        return None
+    s = ts.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def effective_status(finding: dict, now: str | None = None) -> str:
+    """Effective status view: an ``accepted_risk`` past its expiry reverts to open.
+
+    The stored ``status`` is left untouched — this only changes how ``list`` /
+    ``get`` present a finding, so a lapsed risk acceptance resurfaces for
+    re-review without silently rewriting durable state. An unparseable or absent
+    expiry is treated as "no expiry".
+    """
+    status = finding.get("status")
+    if status != "accepted_risk":
+        return status
+    ra = finding.get("risk_acceptance")
+    expires = ra.get("expires_at") if isinstance(ra, dict) else None
+    expires_dt = _parse_iso(expires)
+    if expires_dt is None:
+        return status
+    now_dt = _parse_iso(now) or datetime.now(timezone.utc)
+    return "open" if expires_dt <= now_dt else status
+
+
+def _with_effective_status(finding: dict, now: str) -> dict:
+    """Return a display copy annotated with ``effective_status`` when it differs.
+
+    Never mutates the stored finding; the annotation is a read-time view only.
+    """
+    eff = effective_status(finding, now)
+    if eff == finding.get("status"):
+        return finding
+    view = dict(finding)
+    view["effective_status"] = eff
+    return view
 
 
 # --------------------------------------------------------------------------- #
@@ -583,7 +817,7 @@ def ensure_git_exclude(root: str = ".") -> str | None:
 def cmd_init(args) -> int:
     path = args.file
     if os.path.exists(path) and not args.force:
-        state = load_state(path)
+        state = load_state(path, root=args.root)
         errors = validate_state(state)
         if errors:
             sys.stderr.write(
@@ -605,30 +839,45 @@ def cmd_init(args) -> int:
 
 
 def cmd_list(args) -> int:
-    state = load_state(args.file)
+    state = load_state(args.file, root=args.root)
+    now = _now()
     findings = list(state.get("findings", []))
+    # Filter by EFFECTIVE status so a lapsed accepted_risk resurfaces under
+    # 'open' (and no longer appears under 'accepted_risk').
     if args.status:
-        findings = [f for f in findings if f.get("status") == args.status]
+        findings = [f for f in findings
+                    if effective_status(f, now) == args.status]
     if args.domain:
         findings = [f for f in findings if f.get("domain") == args.domain]
     findings.sort(key=_sort_key)
+    findings = [_with_effective_status(f, now) for f in findings]
     print(json.dumps(findings, indent=2, sort_keys=True))
     return 0
 
 
 def cmd_get(args) -> int:
-    state = load_state(args.file)
+    state = load_state(args.file, root=args.root)
     f = find_by_id(state, args.id)
     if f is None:
         sys.stderr.write(f"no finding with id {args.id}\n")
         return 1
-    print(json.dumps(f, indent=2, sort_keys=True))
+    print(json.dumps(_with_effective_status(f, _now()), indent=2, sort_keys=True))
     return 0
 
 
-def _read_finding_input(source: str) -> dict:
+def _read_finding_input(source: str, root: str | None = None) -> dict:
     if source == "-":
         raw = sys.stdin.read()
+    elif root is not None:
+        # A finding file supplied on the command line is caller-controlled; a
+        # symlinked/absolute/``..`` source must not read outside the repo root.
+        try:
+            raw = safe_read_text(source, root)
+        except PathEscapeError as exc:
+            raise StateError(
+                f"refusing to read finding input outside the repository root: "
+                f"{exc}."
+            ) from exc
     else:
         with open(source, "r", encoding="utf-8") as fh:
             raw = fh.read()
@@ -664,8 +913,8 @@ def _git_head_revision(root: str) -> str | None:
 
 
 def cmd_upsert(args) -> int:
-    state = load_state(args.file)
-    finding = _read_finding_input(args.source)
+    state = load_state(args.file, root=args.root)
+    finding = _read_finding_input(args.source, root=args.root)
     # Stamp source_revision provenance from git HEAD unless the host supplied it.
     if not finding.get("source_revision"):
         rev = _git_head_revision(args.root)
@@ -682,7 +931,7 @@ def cmd_upsert(args) -> int:
 
 
 def cmd_set_status(args) -> int:
-    state = load_state(args.file)
+    state = load_state(args.file, root=args.root)
     f = find_by_id(state, args.id)
     if f is None:
         sys.stderr.write(f"no finding with id {args.id}\n")
@@ -721,7 +970,7 @@ def cmd_resolve(args) -> int:
     Verification is the host agent's responsibility (re-observe the condition);
     this records the verified outcome supplied on the command line.
     """
-    state = load_state(args.file)
+    state = load_state(args.file, root=args.root)
     f = find_by_id(state, args.id)
     if f is None:
         sys.stderr.write(f"no finding with id {args.id}\n")
@@ -753,31 +1002,90 @@ def cmd_resolve(args) -> int:
 _SAFETY_SOURCES = ("repository-content", "tool-output", "findings-json")
 
 
+def _safety_event_from_stdin() -> dict:
+    """Read a safety-event payload as JSON from stdin.
+
+    Reading the payload from stdin (``record-safety-event -``) keeps untrusted
+    repository text off the shell command line, where it could be
+    mis-interpreted as arguments or logged verbatim.
+    """
+    raw = sys.stdin.read()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise StateError(
+            f"record-safety-event - expects a JSON object on stdin: {exc}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise StateError("record-safety-event - expects a JSON object on stdin")
+    return data
+
+
 def cmd_record_safety_event(args) -> int:
     """Record an attempt to manipulate AttestArc itself.
 
     This is an *assessor-safety event*, structurally separate from findings: it
-    is never a security finding about the assessed repository. The excerpt is
-    stored as inert evidence (secret-scanned, capped) and MUST NOT be acted on.
+    is never a security finding about the assessed repository. By default only
+    metadata plus a ``content_hash`` (sha256 of the injected text) is stored, so
+    the attempt is fingerprinted without persisting the raw payload. A raw
+    ``excerpt`` is kept only when explicitly supplied as already-sanitized
+    (secret-scanned, capped) and MUST NOT be acted on.
+
+    Two input styles:
+
+    * ``record-safety-event <source> [--location ...] [--excerpt ...]`` — flags.
+    * ``record-safety-event - < payload.json`` — a JSON object on stdin with
+      ``{source, location?, action_taken?, content?, excerpt?}``. ``content`` is
+      the raw injected text: it is hashed but never persisted.
     """
-    if args.source not in _SAFETY_SOURCES:
+    if args.source == "-":
+        payload = _safety_event_from_stdin()
+        source = payload.get("source")
+        location = payload.get("location")
+        action = payload.get("action_taken") or payload.get("action")
+        content = payload.get("content")
+        excerpt = payload.get("excerpt")
+    else:
+        source = args.source
+        location = args.location
+        action = args.action
+        content = None
+        excerpt = args.excerpt
+
+    if source not in _SAFETY_SOURCES:
         sys.stderr.write(
-            f"invalid source {args.source!r}; choose from "
+            f"invalid source {source!r}; choose from "
             f"{', '.join(_SAFETY_SOURCES)}\n"
         )
         return 1
-    state = load_state(args.file)
-    event = {"source": args.source, "detected_at": _now()}
-    if args.location:
-        event["location"] = args.location
-    if args.excerpt:
-        if looks_like_secret(args.excerpt):
+
+    state = load_state(args.file, root=args.root)
+    event = {"source": source, "detected_at": _now()}
+    if location:
+        event["location"] = str(location)
+
+    # Fingerprint the injected text (raw ``content`` preferred, else the
+    # sanitized ``excerpt``) so the attempt is recorded even when we do not
+    # persist the raw payload. Hashing is one-way, so hashing a secret is safe.
+    hash_input = content if content is not None else excerpt
+    if hash_input is not None and str(hash_input):
+        event["content_hash"] = hashlib.sha256(
+            str(hash_input).encode("utf-8")
+        ).hexdigest()
+
+    # Persist a raw excerpt ONLY when explicitly supplied as already-sanitized.
+    if excerpt:
+        if not isinstance(excerpt, str):
+            sys.stderr.write("excerpt must be a string.\n")
+            return 1
+        if looks_like_secret(excerpt):
             sys.stderr.write(
                 "refusing to store excerpt: appears to contain a secret value.\n"
             )
             return 1
-        event["excerpt"] = args.excerpt
-    event["action_taken"] = args.action or "refused; recorded as data, not followed"
+        event["excerpt"] = excerpt
+
+    event["action_taken"] = action or "refused; recorded as data, not followed"
     event = _cap_strings(event)
     state.setdefault("assessor_safety_events", []).append(event)
     save_state(state, args.file, root=args.root)
@@ -788,7 +1096,7 @@ def cmd_record_safety_event(args) -> int:
 
 def cmd_validate(args) -> int:
     try:
-        state = load_state(args.file, recover=False)
+        state = load_state(args.file, recover=False, root=args.root)
     except StateError as exc:
         sys.stderr.write(f"invalid: {exc}\n")
         return 1
@@ -861,10 +1169,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("record-safety-event", parents=[common],
                         help="record a prompt-injection/manipulation attempt "
                              "aimed at AttestArc (never a target finding)")
-    sp.add_argument("source", choices=_SAFETY_SOURCES,
-                    help="where the manipulation attempt appeared")
+    sp.add_argument("source", choices=_SAFETY_SOURCES + ("-",),
+                    help="where the manipulation attempt appeared, or '-' to "
+                         "read a JSON payload {source, location?, action_taken?, "
+                         "content?, excerpt?} from stdin (keeps untrusted text "
+                         "off the command line)")
     sp.add_argument("--location", help="e.g. a file path or tool name")
-    sp.add_argument("--excerpt", help="short sanitized excerpt (inert evidence)")
+    sp.add_argument("--excerpt",
+                    help="short already-sanitized excerpt to persist as inert "
+                         "evidence; a content_hash is always recorded")
     sp.add_argument("--action", help="what the assessor did")
     sp.set_defaults(func=cmd_record_safety_event)
 
@@ -875,25 +1188,40 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _resolve_root_and_file(args) -> None:
-    """Resolve the findings ``--file`` path and the write-confinement ``--root``.
+# Commands that write state. They require an explicit --root so the write
+# confinement (and now the read confinement) is code-enforced, not inferred from
+# a caller-supplied --file — the boundary must not be steerable by prompt.
+_MUTATING_COMMANDS = (
+    "init", "upsert", "set-status", "resolve", "record-safety-event",
+)
 
-    Two invocation styles, both safe:
+
+def _resolve_root_and_file(args) -> None:
+    """Resolve the findings ``--file`` path and the confinement ``--root``.
+
+    Two invocation styles:
 
     * With an explicit ``--root`` (how the skill invokes this from its own
       package directory): a relative ``--file`` is taken under that root and
-      every write is confined to it.
-    * Without ``--root``: the (possibly absolute) ``--file`` location is
-      trusted as-is, and the confinement root is *inferred* from it — the
-      directory that contains ``.attestarc`` if the file lives there, else the
-      file's own directory. A symlinked ``.attestarc`` that escapes that
-      inferred root is still refused by ``_assert_within_root``.
+      every read/write is confined to it. **Required for mutating commands.**
+    * Without ``--root`` (read-only commands only): the (possibly absolute)
+      ``--file`` location is trusted as-is, and the confinement root is
+      *inferred* from it — the directory that contains ``.attestarc`` if the file
+      lives there, else the file's own directory. A symlink that escapes that
+      inferred root is still refused by the containment checks.
 
     Defaulting ``--root`` to ``.`` used to break the common case of pointing an
     absolute ``--file`` at another repository: the write was wrongly refused as
     "outside the repository root" because the root was still the skill's CWD.
     """
     explicit_root = getattr(args, "root", None)
+    command = getattr(args, "command", None)
+    if explicit_root is None and command in _MUTATING_COMMANDS:
+        raise StateError(
+            f"{command} requires an explicit --root (the assessed repository "
+            "root). It confines every read and write to that repository; the "
+            "boundary is code-enforced, not inferred from --file."
+        )
     if not os.path.isabs(args.file):
         args.file = os.path.join(explicit_root or ".", args.file)
     if explicit_root is not None:
@@ -906,8 +1234,8 @@ def _resolve_root_and_file(args) -> None:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    _resolve_root_and_file(args)
     try:
+        _resolve_root_and_file(args)
         return args.func(args)
     except StateError as exc:
         sys.stderr.write(f"error: {exc}\n")

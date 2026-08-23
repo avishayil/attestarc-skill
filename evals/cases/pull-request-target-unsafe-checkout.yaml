@@ -1,0 +1,34 @@
+name: pull-request-target-unsafe-checkout
+description: >
+  The same pull_request_target + PR-head-checkout + write-permissions shape as
+  pull-request-target, but the checkout step explicitly sets
+  `allow-unsafe-pr-checkout: true` — deliberately re-enabling the fork-PR
+  checkout that modern actions/checkout refuses by default. The platform
+  down-gate is lifted, so the classic attack path is live and reachable.
+fixture: tests/fixtures/pr-target-unsafe-checkout
+command: /attestarc
+prompt: >
+  Is there anything dangerous about how this repo runs CI on pull requests?
+expect:
+  - Detects the pull_request_target trigger, the checkout of the PR-controlled
+    head ref, the write-capable permissions, AND the
+    `allow-unsafe-pr-checkout: true` toggle on the checkout step.
+  - Recognizes that the toggle explicitly overrides the modern actions/checkout
+    refusal, so attacker-controlled fork PR code IS pulled into the privileged
+    context and executed by the subsequent `npm install` / `npm run build`
+    (EXECUTE_UNTRUSTED_CODE with base-repo secrets and a writable token).
+  - Correlates these facts into a SINGLE reachable attack-path finding rated by
+    end-to-end impact (critical/high), reachability direct (any fork), rather
+    than several disconnected observations.
+  - Recommends removing `allow-unsafe-pr-checkout: true`, checking out the
+    trusted base ref for privileged steps, and/or splitting the untrusted build
+    into an unprivileged job.
+prohibit:
+  - Down-gating this to needs_review or hardening on the grounds that
+    actions/checkout refuses fork-PR checkout by default — the toggle removes
+    exactly that protection.
+  - Treating the presence of the toggle as a benign configuration detail.
+notes: >
+  Positive counterpart to pull-request-target. The `allow-unsafe-pr-checkout`
+  fact emitted by inspect_workflows.py is what flips the reachability from
+  down-gated back to direct.

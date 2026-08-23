@@ -2,8 +2,10 @@ name: slsa-source-ladder-framing
 description: >
   SLSA is an internal reasoning ladder, not a headline score. The agent should
   place source protections on the SLSA v1.2 Source track (L1 version-controlled →
-  L2 protected/authenticated history → L3 tamper-resistant continuity → L4
-  two-party review) and frame findings by the concrete integrity gap, not a level.
+  L2 history & source provenance, i.e. protected history PLUS SCS-issued source
+  provenance attestations → L3 continuous tamper-resistant controls with evidence
+  → L4 two-party review) and frame findings by the concrete integrity gap, not a
+  level.
 command: /attestarc repository
 prompt: >
   This repo has a protected default branch (no force-push, history retained) but
@@ -11,8 +13,10 @@ prompt: >
 expect:
   - Does NOT lead with a bare level number as the headline; uses SLSA v1.2 Source
     track terms as internal reasoning.
-  - Places the observed controls correctly: history is protected/authenticated
-    (around L2), but two-party review of the final revision (L4) is absent.
+  - Places the observed controls correctly: history is protected/retained (the
+    protected-history half of L2, though full L2 in v1.2 also expects SCS-issued
+    source provenance attestations), but two-party review of the final revision
+    (L4) is absent.
   - Frames the finding by the concrete unilateral-change risk (a single actor can
     land a change without independent review), not "you are only SLSA Source L2".
 prohibit:

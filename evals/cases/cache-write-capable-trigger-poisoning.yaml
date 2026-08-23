@@ -10,8 +10,15 @@ command: /attestarc github-actions
 prompt: >
   Review this repository's build/release workflows for cache-poisoning risk.
 expect:
-  - Identifies the cache WRITE performed under a write-capable trigger and the
-    later RESTORE-and-execute in a privileged job sharing the cache key scope.
+  - Identifies the cache WRITE performed under a write-capable trigger — one of
+    the seven that write the default-branch cache scope (`push`,
+    `workflow_dispatch`, `repository_dispatch`, `delete`, `registry_package`,
+    `page_build`, `schedule`) — and the later RESTORE-and-execute in a privileged
+    job sharing the cache key scope.
+  - Walks the write-scope decision tree (actor → trigger → cache scope → WRITE
+    allowed? → restored by a privileged consumer? → restored data executed?),
+    confirming the writer here is genuinely write-capable, not a read-only
+    low-trust trigger.
   - Closes the chain — attacker-influenced content → poisoned cache key →
     privileged execution / publish — as MODIFY_PIPELINE / EXECUTE_UNTRUSTED_CODE
     reaching a release or deployment asset.

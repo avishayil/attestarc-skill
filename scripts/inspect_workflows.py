@@ -589,19 +589,51 @@ def _scan_run_text(step):
 
 
 def _checkout_ref_facts(step, action):
-    """Detect actions/checkout using an attacker-controlled ref."""
+    """Emit facts about an ``actions/checkout`` step (facts, not verdicts).
+
+    Modern ``actions/checkout`` refuses to check out fork-PR code under
+    ``pull_request_target`` / ``workflow_run`` unless the step sets
+    ``with: allow-unsafe-pr-checkout: true``; it also leaves no usable
+    ``GITHUB_TOKEN`` on disk when ``persist-credentials: false``. Whether a given
+    checkout *version* enforces that refusal is a property of the pinned ref, so
+    we surface the version facts (``action_ref`` / ``action_ref_kind`` /
+    ``action_pinned``) and the two safety toggles and let the host reason about
+    reachability. We deliberately do NOT decide here that "version N is safe".
+
+    Returns ``None`` for a bare ``uses: actions/checkout`` with no ``with:`` — the
+    default checkout with nothing notable to record.
+    """
     if not action["name"].endswith("actions/checkout"):
         return None
-    with_ = step.get("with")
-    if not isinstance(with_, dict):
+    with_ = step.get("with") if isinstance(step.get("with"), dict) else {}
+    ref = with_.get("ref") if isinstance(with_.get("ref"), str) else None
+    allow_unsafe = with_.get("allow-unsafe-pr-checkout")
+    persist = with_.get("persist-credentials")
+    allow_unsafe = allow_unsafe if isinstance(allow_unsafe, bool) else None
+    persist = persist if isinstance(persist, bool) else None
+
+    # Nothing notable: a plain default checkout. The version still appears in the
+    # job's ``actions`` list, so there is no need to duplicate it here.
+    if ref is None and allow_unsafe is None and persist is None:
         return None
-    ref = with_.get("ref")
-    if not isinstance(ref, str):
-        return None
-    untrusted = any(n in ref for n in _UNTRUSTED_REF_NEEDLES)
-    if "${{" not in ref:
-        return None
-    return {"ref": ref, "references_untrusted_ref": untrusted}
+
+    facts = {
+        # Version facts of the pinned checkout, so the host can reason about
+        # whether the pinned ref enforces the fork-PR refusal (no "vN = safe").
+        "action_ref": action.get("ref"),
+        "action_ref_kind": action.get("ref_kind"),
+        "action_pinned": action.get("pinned"),
+        # Safety toggles (absent when not set on the step).
+        "allow_unsafe_pr_checkout": allow_unsafe,
+        "persist_credentials": persist,
+    }
+    if ref is not None:
+        facts["ref"] = ref
+        facts["references_untrusted_ref"] = any(
+            n in ref for n in _UNTRUSTED_REF_NEEDLES
+        )
+        facts["references_expression"] = "${{" in ref
+    return facts
 
 
 def _inspect_job(name, job):

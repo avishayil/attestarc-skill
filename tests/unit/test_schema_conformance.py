@@ -116,3 +116,40 @@ def test_top_level_assessor_safety_events_declared(assets_dir):
     assert "assessor_safety_events" in schema["properties"]
     assert schema["properties"]["assessor_safety_events"]["items"]["$ref"] == \
         "#/definitions/assessor_safety_event"
+
+
+def test_schema_id_matches_version(assets_dir):
+    assert _load_schema(assets_dir)["$id"].endswith("findings-3.json")
+
+
+def test_assessor_safety_event_has_content_hash(assets_dir):
+    props = _load_schema(assets_dir)["definitions"]["assessor_safety_event"]["properties"]
+    assert "content_hash" in props
+    assert props["content_hash"]["pattern"] == "^[0-9a-f]{64}$"
+
+
+# --------------------------------------------------------------------------- #
+# validator <-> schema parity: the hand-rolled validate_state must enforce the
+# same closed vocabularies the schema declares (no jsonschema at runtime).
+# --------------------------------------------------------------------------- #
+def test_validator_key_sets_match_schema(assets_dir):
+    schema = _load_schema(assets_dir)
+    assert state._TOPLEVEL_KEYS == set(schema["properties"].keys())
+    assert state._FINDING_KEYS == _allowed_keys(schema, "finding")
+    assert state._RELATED_KEYS == _allowed_keys(schema, "related_finding")
+    assert state._RISK_ACCEPTANCE_KEYS == _allowed_keys(schema, "risk_acceptance")
+    assert state._SAFETY_EVENT_KEYS == _allowed_keys(schema, "assessor_safety_event")
+
+
+def test_validator_enums_match_schema(assets_dir):
+    schema = _load_schema(assets_dir)
+    defs = schema["definitions"]
+    assert set(state.FINDING_TYPES) == set(defs["finding"]["properties"]["type"]["enum"])
+    assert set(state.RELATIONSHIPS) == set(
+        defs["related_finding"]["properties"]["relationship"]["enum"])
+    assert set(state.REACHABILITY) == set(
+        defs["threat"]["properties"]["reachability"]["enum"])
+    assert set(state.EVIDENCE_TYPES) == set(
+        defs["evidence"]["properties"]["type"]["enum"])
+    assert set(state._SAFETY_SOURCES) == set(
+        defs["assessor_safety_event"]["properties"]["source"]["enum"])

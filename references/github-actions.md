@@ -22,7 +22,10 @@ whether it is SHA-pinned), `secrets` (what a reusable-workflow call passes —
 Actions cache), `actions[]` (`name`, `ref`, `pinned`, `ref_kind`,
 `looks_like_version`, `kind` — see External Actions and pinning), `run_steps[]`
 (`expressions`, `references_untrusted_input`, `fetch_execute`,
-`fetch_execute_excerpt`), and `checkout_refs[]` (`references_untrusted_ref`).
+`fetch_execute_excerpt`), and `checkout_refs[]` (`references_untrusted_ref`,
+plus the safety toggles `allow_unsafe_pr_checkout` / `persist_credentials` and
+the pinned checkout version facts `action_ref` / `action_ref_kind` /
+`action_pinned` — see `actions/checkout` semantics below).
 `parse_partial: true` means read the raw file before concluding. These are
 presence facts, not verdicts: a `uses_cache: true` or `secrets: inherit` is only
 a finding once you close the attack chain to a reachable, valuable asset.
@@ -87,6 +90,16 @@ pull_request_target        # runs with base-repo secrets/token
 `environment`/secrets usage. If you see the checkout of PR-controlled code under
 a privileged trigger, that is the finding — do not split it up.
 
+**But do not stop at the checkout: the platform now blocks the naive form by
+default.** Modern `actions/checkout` refuses to check out fork-PR code under
+`pull_request_target` / `workflow_run` unless the step sets
+`with: allow-unsafe-pr-checkout: true`. So the explicit-ref pattern above is only
+directly reachable when that toggle is set (or a version predating the guard is
+pinned). Down-gate accordingly — see `actions/checkout` semantics below — and
+remember the checkout is not the only way untrusted code enters a privileged job:
+a `git fetch`/`curl` of the PR ref, another action, or a composite step can pull
+and run it regardless of the checkout guard. Trace *that* fetch-and-execute.
+
 ### Workflow → workflow privilege bridging
 
 `workflow_run` runs **trusted, base-repo** workflow code (with secrets and a
@@ -114,34 +127,51 @@ a `download-artifact` action or a `run_steps` fetch.
 ### Cache poisoning
 
 The Actions cache is a **trust boundary**, not just a speed optimization: cache
-entries are not signed or verified. What decides reachability is the **scope**
-rule — GitHub scopes each cache entry to the git ref that created it, and a run
-restores from its own ref with fallback to the repository's **default branch**
-(and, for a pull request, its base branch). Reason about *who can write the scope
-the privileged run restores from*:
+entries are not signed or verified. Reachability is decided by *who can WRITE the
+scope the privileged run restores from* — and the platform's write rules are
+narrow. GitHub scopes each cache entry to the git ref that created it; a run
+restores from its own ref, with fallback to the repository's **default branch**
+(and, for a pull request, its base branch). Walk the write-scope decision tree:
 
-- A **fork `pull_request`** run is isolated: its token is read-only and any cache
-  it writes is confined to that PR's own scope. It **cannot** write an entry that
-  a later run on the default or a protected branch will restore. The often-repeated
-  "a fork PR poisons the default-branch cache" chain does **not** close — do not
-  flag it on that basis.
-- The cache *is* poisonable by an actor who can cause code to run **in a base-repo
-  ref scope** with cache-write access: a lower-privileged collaborator pushing a
-  topic branch, or a `pull_request_target` / `issue_comment` / `workflow_run` run
-  a fork influenced (these run in the base repo, in a branch scope, with a
-  writable token). Whatever such a run writes into a branch scope, a privileged
-  run on that branch — or one that falls back to it — can later restore.
+```
+actor → trigger → which cache scope can this run WRITE?
+  → low-trust trigger (pull_request_target, issue_comment, workflow_run)?
+        → READ-ONLY cache access. It CANNOT create or overwrite any cache
+          entry. It cannot poison anything. Stop — no write, no path.
+  → fork pull_request?
+        → confined to that PR's own merge-ref scope. A later run on the
+          default/protected branch does NOT restore from it. The oft-repeated
+          "a fork PR poisons the default-branch cache" chain does NOT close.
+  → a WRITE-capable trigger in a base-repo ref scope?
+        → only push, workflow_dispatch, repository_dispatch, delete,
+          registry_package, page_build, schedule write the default-branch
+          scope. THIS is the real poisoning surface.
+        → can a LOWER-privileged actor reach one? (e.g. a collaborator who may
+          push a topic branch a privileged run later restores from via
+          same-branch or default-branch fallback)
+              → is the restored content then EXECUTED by a privileged
+                consumer (not just read as data)?
+                    → EXECUTE_UNTRUSTED_CODE in the privileged context → find.
+```
+
+The load-bearing correction: the low-trust triggers (`pull_request_target`,
+`issue_comment`, `workflow_run`) get **read-only** cache access, so they cannot
+be the *writer* in a poisoning chain — do not build one on the premise that a
+`pull_request_target` run writes a branch scope. The writer is an actor who can
+reach one of the seven write-capable triggers in a base-repo scope (typically a
+lower-privileged `push` to a branch a privileged run restores from).
 
 If the restored content is executable (compiled binaries, `node_modules`, a
 toolchain, a downloaded dependency) and a privileged job runs it, an attacker who
 poisoned that scope achieves `EXECUTE_UNTRUSTED_CODE` in the privileged context.
 
 `uses_cache: true` on a job is the presence fact. To close the chain ask: can a
-low-trust actor populate the key **in a scope** the privileged job restores from,
-and does the privileged job *execute* what it restored (vs merely reading data)?
-Category: `cache-trust-boundary`. Remediation directions: scope/segment cache keys
-so untrusted-writable refs cannot populate keys trusted runs read, or avoid
-restoring caches in privileged jobs that execute the restored content.
+low-trust actor **write** (not just read) the key **in a scope** the privileged
+job restores from, and does the privileged job *execute* what it restored (vs
+merely reading data)? Category: `cache-trust-boundary`. Remediation directions:
+scope/segment cache keys so untrusted-writable refs cannot populate keys trusted
+runs read, or avoid restoring caches in privileged jobs that execute the restored
+content.
 
 ## Token permissions
 
@@ -230,17 +260,47 @@ receiving one scoped secret is very different from `@main` with `inherit`.
 **`actions/checkout` version semantics.** The checked-out ref is what matters,
 not just the action version. Under `pull_request_target`/`workflow_run`, an
 explicit `with: ref: ${{ github.event.pull_request.head.sha }}` (or `head.ref`)
-checks out **attacker-controlled code** into a privileged context —
+*requests* a checkout of **attacker-controlled code** into a privileged context —
 `inspect_workflows.py` flags this as `checkout_refs[].references_untrusted_ref`.
 The checkout alone is inert; the trust transition closes when a later step
 (build, test, install, `make`, a local action, an arbitrary script) then
 **executes** that checked-out code with the privileged token/secrets in scope.
 Trace to the executing step, not just the checkout.
+
+**The platform down-gate — reason about it, do not hardcode "vN = safe".**
+Modern `actions/checkout` refuses a fork-PR checkout under
+`pull_request_target`/`workflow_run` by default; the refusal is lifted only by
+`with: allow-unsafe-pr-checkout: true`. The inspector emits the facts to decide
+reachability: `allow_unsafe_pr_checkout` (the toggle, or absent), and the pinned
+version (`action_ref`, `action_ref_kind`, `action_pinned`). Walk it:
+
+```
+PR-head checkout requested under pull_request_target / workflow_run
+  → allow_unsafe_pr_checkout: true?           → refusal lifted → attack path
+      continues; if the code is then executed, this is the finding (likely
+      CRITICAL) — a positive result, not hardening.
+  → pinned checkout version enforces the refusal? → the DIRECT checkout is
+      blocked, so the naive path does not close on the checkout alone.
+      → but untrusted code can still enter another way (git fetch / curl of the
+        PR ref, another action, a composite/local step) → trace THAT
+        fetch-and-execute; the mitigation is specific to actions/checkout.
+  → version/behaviour unverifiable (older pin, unknown fork of checkout,
+      undecidable from the file) → needs_review with an evidence_gap; do not
+      assume either the guard or the exploit.
+```
+
+So an `allow-unsafe-pr-checkout: true` step is a find; a default modern checkout
+with no other untrusted-code entry is down-gated to `needs_review`/hardening; and
+the guard never rules out untrusted code arriving by other means. The mitigation
+is specific to `actions/checkout` — a privileged job can still fetch untrusted
+source itself.
+
 Also note `persist-credentials: true` (the default before you set it false)
-leaves the token on disk for later steps, and `fetch-depth`/submodule options
-that pull additional untrusted content. The safe default checkout under a fork
-`pull_request` is fine; the danger is re-pointing it at PR head under a
-privileged trigger.
+leaves the token on disk for later steps — the inspector emits
+`persist_credentials` — and `fetch-depth`/submodule options that pull additional
+untrusted content. The safe default checkout under a fork `pull_request` is fine;
+the danger is re-pointing it at PR head under a privileged trigger *with the
+refusal disabled*.
 
 ## Untrusted input into shell / expressions
 
@@ -293,9 +353,16 @@ mitigation is present, and never turn its absence into a finding:
 
 - **Require-SHA-pinning policy** (`actions/*` allow-list / "require actions to be
   pinned to a full-length commit SHA"). Under an enforced policy, a movable
-  `uses:` ref (`@v4`, `@main`) is rejected at run time, so the drift path is not
-  reachable the usual way — the finding becomes "policy would need to lapse", not
-  "runs arbitrary code now".
+  **Action** `uses:` ref at step level (`@v4`, `@main`) is rejected at run time,
+  so that drift path is not reachable the usual way — the finding becomes "policy
+  would need to lapse", not "runs arbitrary code now". **Carve-out: the policy
+  applies to Actions, not reusable workflows.** A job-level reusable-workflow call
+  (`job.uses: org/repo/.github/workflows/x.yml@v3`) may still legitimately use a
+  tag or branch under an enforced require-SHA policy — the policy does not force a
+  SHA there. So a mutable reusable-workflow ref is **not** down-gated by SHA
+  enforcement; it stays a live drift finding (`mutable-reusable-workflow`). Only
+  `step.uses` Action refs are down-gated. When in doubt about which kind a `uses:`
+  is, the inspector's `kind` (`external` vs `reusable-workflow`) tells you.
 - **Workflow Execution Protections / fork-PR approval** — "require approval for
   all outside collaborators" (or all fork PRs) gates whether an untrusted trigger
   runs at all. An approval-gated fork `pull_request` is not attacker-reachable

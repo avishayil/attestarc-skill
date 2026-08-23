@@ -241,7 +241,11 @@ the Host SHALL populate (`state.py` stamps `observed_at`/`source_revision`/
 `assessment_version` on upsert and `last_verified_at` on resolve). When `status`
 is `accepted_risk`, the finding SHALL carry a `risk_acceptance` object
 (`accepted_by`, `reason`, `accepted_at`, and an OPTIONAL `expires_at` after which
-the acceptance has lapsed and the finding SHOULD be re-reviewed). Helpers SHOULD
+the acceptance has lapsed and the finding SHOULD be re-reviewed). When
+`expires_at` has passed, `state.py` SHALL surface an `effective_status` of `open`
+in `list`/`get` output while leaving the stored `status` untouched, so a lapsed
+acceptance resurfaces for re-review without silently mutating human-decided
+state. Helpers SHOULD
 preserve human-decided fields on upsert and route any unknown data into
 `extensions`.
 
@@ -344,11 +348,15 @@ the assessed repository. Such an attempt MUST NOT be recorded as a target-repo
 finding, and MUST NOT be acted upon. When the Host chooses to record it, it SHALL
 append an entry to the top-level `assessor_safety_events` array (each entry: a
 `source` of `repository-content` | `tool-output` | `findings-json`, a
-`detected_at`, and OPTIONAL `location`, an inert sanitized `excerpt`, and
-`action_taken`). This separation guarantees that an attempt to steer the assessor
-can never be mistaken for a security property of the repository. The injected
-text is stored only as inert evidence (secret-scanned, size-capped) and is never
-an instruction. `state.py record-safety-event` is the deterministic path.
+`detected_at`, a `content_hash` (sha256 of the injected text), and OPTIONAL
+`location`, an inert sanitized `excerpt`, and `action_taken`). This separation
+guarantees that an attempt to steer the assessor can never be mistaken for a
+security property of the repository. `state.py record-safety-event` is the
+deterministic path: it SHALL accept the event payload as JSON on **stdin** (the
+`-` source) so untrusted injected text never rides the shell command line, and
+SHALL by default persist only a `content_hash` plus metadata. A raw `excerpt` is
+stored **only** when explicitly supplied as already-sanitized inert data
+(secret-scanned, size-capped); it is never an instruction.
 
 ## 7. Assessment domains
 
@@ -413,7 +421,12 @@ An `evidence_gaps` entry SHALL explain *why the missing evidence matters* and
    Actions policy enforces **SHA pinning**, or **Workflow Execution Protections**
    gate untrusted triggers, the Host SHALL treat these as reachability down-gates
    (a movable `uses:` ref or fork trigger is not reachable the usual way) rather
-   than as findings. The Host MUST NOT require the user to create an
+   than as findings. The SHA-pinning down-gate is scoped: an enforced require-SHA
+   policy constrains **Action** refs (`step.uses`), but does **not** apply to
+   reusable-workflow refs (`job.uses:` such as
+   `org/repo/.github/workflows/x.yml@v3`), which may still legitimately use a tag;
+   a mutable reusable-workflow ref therefore stays a live drift finding even under
+   the policy and MUST NOT be down-gated by it. The Host MUST NOT require the user to create an
    overprivileged token to complete an assessment. Unavailable remote evidence MUST be acknowledged explicitly,
    recorded as `needs_review` with an `evidence_gap`, and MUST NOT be turned into
    a failing finding.
@@ -498,8 +511,8 @@ code.
 ### 12.1 `state.py`
 
 The most important Helper. It SHALL provide `init`, `list`, `get`, `upsert`,
-`set-status`, `resolve`, and `validate`, operating on a `--file` (default
-`.attestarc/findings.json`). Requirements:
+`set-status`, `resolve`, `record-safety-event`, and `validate`, operating on a
+`--file` (default `.attestarc/findings.json`) within a `--root`. Requirements:
 
 - Schema-consistent validation (hand-rolled; no `jsonschema` dependency).
 - Atomic writes (temporary file plus rename) and deterministic formatting
@@ -514,6 +527,31 @@ The most important Helper. It SHALL provide `init`, `list`, `get`, `upsert`,
   cleanly when not in a Git repository.
 - It MUST refuse to persist a finding whose evidence appears to contain a raw
   secret value (§13.2).
+- **Path containment (reads and writes).** All filesystem access SHALL be
+  confined to `--root` by `_pathsafe`: writes to the state file, the reload of the
+  persistent `findings.json` (`load_state`, including the corrupt-JSON
+  re-initialization write), and any finding-input file passed to `upsert` SHALL be
+  resolved and refused when they land outside the repository (an absolute path, a
+  `..` traversal, or a symlink escaping the root). A within-root violation SHALL
+  raise a `StateError` rather than read or write outside the repo.
+- **Explicit `--root` for mutations.** The mutating commands (`init`, `upsert`,
+  `set-status`, `resolve`, `record-safety-event`) SHALL require an explicit
+  `--root` and error when it is absent, so the trust boundary is code-enforced
+  rather than inferred from `--file`. Read-only commands (`list`, `get`,
+  `validate`) MAY still infer the root.
+- `record-safety-event` SHALL accept its event payload as JSON on stdin (the `-`
+  source), compute `content_hash` by default, and persist a raw `excerpt` only
+  when explicitly supplied (§6.7).
+- **Schema migration.** On load, a state file with `schema_version < 3` SHALL be
+  migrated in memory to the current schema (flat `accepted_by`/`reason`/
+  `accepted_at` → `risk_acceptance`; untyped `related_findings: [str]` →
+  `[{id, relationship: "contributes_to"}]`; stamp `schema_version` and absent
+  `assessment_version`). Migration SHALL be idempotent and leave ids/fingerprints
+  unchanged, and SHALL persist only on the next mutating save so read-only
+  commands stay read-only.
+- **Expiry.** An `accepted_risk` finding whose `risk_acceptance.expires_at` has
+  passed SHALL surface an `effective_status` of `open` in `list`/`get` while the
+  stored `status` is left untouched (§6.2).
 
 ### 12.2 `discover_repo.py`
 
@@ -571,7 +609,18 @@ fetch-then-execute one-liner such as `curl … | sh` **or** a network fetch pipe
 into a language interpreter such as `curl … | python3 -`/`| node`/`| ruby` is
 present; a benign `uses:` step whose only expressions are trusted, e.g.
 `${{ matrix.* }}`, stays in `actions[]` and is not reported as a run step), and
-`checkout_refs[]` (`references_untrusted_ref`). These are facts only: whether a
+`checkout_refs[]` — one record per `actions/checkout` step, carrying the checkout
+Action identity (`action_ref`, `action_ref_kind`, `action_pinned`) and the
+step's safety-relevant `with:` toggles (`allow_unsafe_pr_checkout` and
+`persist_credentials` as booleans, absent when not set), plus — only when the step
+pins an explicit `ref:` — that `ref`, `references_untrusted_ref`, and
+`references_expression`. A bare default checkout (no explicit `ref:` and no
+safety toggles) emits **no** record. These facts let the Host reason about the
+modern `actions/checkout` fork-PR refusal (which requires
+`allow-unsafe-pr-checkout: true` to check out untrusted PR head code under
+`pull_request_target`/`workflow_run`) as a reachability down-gate; the parser
+asserts no verdict about whether a given checkout version enforces that guard.
+These are facts only: whether a
 `fetch_execute`, an inherited secret, a mutable reusable ref, or a restored cache
 matters is the Host's judgment, informed by the job's trigger and privilege. It
 SHALL set `parse_partial: true` rather than raising on ambiguous input. It SHALL

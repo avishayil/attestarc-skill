@@ -40,3 +40,37 @@ def resolve_within_root(path: str, root: str) -> tuple[str, str, bool]:
 def is_within_root(path: str, root: str) -> bool:
     """True if ``path`` resolves to inside ``root`` (see :func:`resolve_within_root`)."""
     return resolve_within_root(path, root)[2]
+
+
+class PathEscapeError(Exception):
+    """Raised when a caller-supplied path resolves outside the assessed root.
+
+    Carries the resolved path and root so callers can build a precise message.
+    """
+
+    def __init__(self, path: str, resolved: str, root_real: str):
+        self.path = path
+        self.resolved = resolved
+        self.root_real = root_real
+        super().__init__(
+            f"{path} resolves to {resolved}, which is not under {root_real}"
+        )
+
+
+def safe_read_text(path: str, root: str, encoding: str = "utf-8") -> str:
+    """Read ``path`` as text only if it resolves to inside ``root``.
+
+    The repository under assessment is untrusted input: a symlinked, absolute, or
+    ``..``-traversing path in the subject must never let a helper read outside the
+    assessed root. Containment is computed by :func:`resolve_within_root` (the
+    same rule the write side uses), so a symlinked ``findings.json`` or upsert
+    ``source`` pointing at ``~/.ssh`` is refused *before* it is opened.
+
+    Raises :class:`PathEscapeError` on a containment violation; otherwise returns
+    the file contents.
+    """
+    resolved, root_real, within = resolve_within_root(path, root)
+    if not within:
+        raise PathEscapeError(path, resolved, root_real)
+    with open(path, "r", encoding=encoding) as fh:
+        return fh.read()

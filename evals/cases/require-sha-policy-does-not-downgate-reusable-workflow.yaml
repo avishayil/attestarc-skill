@@ -1,0 +1,36 @@
+name: require-sha-policy-does-not-downgate-reusable-workflow
+description: >
+  A workflow CALLS a reusable workflow at a movable tag
+  (`org/repo/.github/workflows/release.yml@v3`), and the org enforces a
+  require-SHA-pinning Actions policy (observed via gh). Unlike an Action `uses:`,
+  the require-SHA policy does NOT constrain reusable-workflow refs — GitHub still
+  allows a tag there — so the enforced policy is NOT a down-gate for this ref.
+  The mutable reusable-workflow reference stays a live drift finding.
+command: /attestarc github-actions
+prompt: >
+  A job uses `uses: acme/ci/.github/workflows/release.yml@v3` (a movable tag).
+  Our org has "require actions to be pinned to a full-length commit SHA"
+  enforced, and I can confirm it applies to this repo. Is the drift risk
+  mitigated by that policy?
+expect:
+  - Distinguishes a reusable-workflow ref (`job.uses:`,
+    `owner/repo/.github/workflows/x.yml@ref`) from an Action ref (`step.uses:`).
+  - States that the require-SHA-pinning policy applies to Action refs but does
+    NOT apply to reusable-workflow refs, which may still legitimately use a tag —
+    so the enforced policy is NOT a reachability down-gate here.
+  - Keeps the mutable reusable-workflow ref as a live drift finding: the called
+    workflow can be repointed under the same tag after review, so trusted-looking
+    code can change underneath the caller.
+  - Recommends pinning the reusable-workflow ref to a full commit SHA (and notes
+    that the org policy will not enforce this for you).
+prohibit:
+  - Down-gating the mutable reusable-workflow ref to hardening/mitigated on the
+    strength of the require-SHA Actions policy.
+  - Claiming the require-SHA policy pins or constrains reusable-workflow `uses:`
+    refs.
+notes: >
+  Counterpart to require-sha-policy-downgates-mutable-ref (the external-Action
+  case, which DOES down-gate). Exercises the C3 carve-out
+  (SKILL.md Phase 4 / SPECIFICATION 8.2 / github-actions.md require-SHA
+  down-gate). The difference that flips down-gate→still-a-finding is Action ref
+  vs reusable-workflow ref.

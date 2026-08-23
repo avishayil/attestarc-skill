@@ -10,8 +10,12 @@ prompt: >
   Review this repository's CI for cache-poisoning risk.
 expect:
   - Recognizes that a fork `pull_request` run is isolated — read-only token, no
-    secrets — and its cache is scoped to the merge ref, so it cannot overwrite a
-    cache entry a default-branch job would restore.
+    secrets — and its cache is confined to its own merge-ref scope, so it cannot
+    write or overwrite the default-branch scope a privileged job would restore
+    from (only the seven write-capable triggers do).
+  - Walks the write-scope decision tree and stops at "WRITE to a scope the
+    privileged job restores? no" — the fork PR writes only its own isolated
+    scope — so the chain does not close.
   - Concludes there is no closed poisoning chain here (no cache-write-capable
     trust transition into a privileged job) and does NOT raise a finding, or
     records at most a `needs_review` naming the missing transition.

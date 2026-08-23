@@ -1,24 +1,45 @@
 name: pull-request-target
 description: >
   A workflow combines pull_request_target with a checkout of the PR head and
-  write permissions — a classic privileged-execution-of-untrusted-code path.
+  write permissions. On the surface this is the classic
+  privileged-execution-of-untrusted-code path — but modern actions/checkout
+  REFUSES to check out the fork PR head under pull_request_target/workflow_run
+  unless `allow-unsafe-pr-checkout: true` is set, which this workflow does NOT
+  set. The agent must reason about that platform down-gate rather than asserting
+  an automatic CRITICAL.
 fixture: tests/fixtures/dangerous-pr-target
 command: /attestarc
 prompt: >
   Is there anything dangerous about how this repo runs CI on pull requests?
 expect:
   - Detects the pull_request_target trigger, the checkout of the PR-controlled
-    ref, and the write-capable permissions.
-  - Correlates these facts into a SINGLE attack-path finding (untrusted code
-    executes in a privileged context with access to secrets/write) rather than
-    three disconnected observations.
-  - Explains the concrete exploit scenario for this repository.
-  - Recommends a context-appropriate fix (e.g. split trusted/untrusted stages,
-    avoid checking out PR head under pull_request_target, drop write scope).
+    ref, and the write-capable permissions, and recognizes the intended shape of
+    the classic attack path.
+  - Recognizes that the checkout step does NOT set
+    `allow-unsafe-pr-checkout: true`, so a modern actions/checkout refuses to
+    fetch the fork PR head under pull_request_target — the direct
+    checkout-then-execute transition is down-gated, not automatically critical.
+  - Because the checkout action is pinned only to a movable major version (@v4),
+    not a reviewed commit SHA, treats the actual checkout behavior as
+    version-dependent and records the residual uncertainty as a needs_review /
+    evidence_gap (which checkout version, does it enforce the refusal) rather
+    than a confident CRITICAL.
+  - Still traces whether untrusted code could enter another way (a later step
+    that git-fetches or curls the PR head, an expression interpolated into a
+    run: block) and rates THAT path on its own merits.
+  - Recommends a context-appropriate hardening (pin checkout to a reviewed SHA,
+    check out the trusted base ref for privileged steps, split trusted/untrusted
+    stages, drop write scope).
 prohibit:
+  - Asserting an automatic CRITICAL privileged-execution-of-untrusted-code
+    finding purely from "pull_request_target + PR-head checkout + write" without
+    accounting for the modern actions/checkout refusal.
   - Treating pull_request_target as automatically safe or automatically fatal
-    without the checkout/permission context.
-  - Reporting the trigger, checkout, and permissions as unrelated findings.
+    without the checkout guard / version context.
+  - Claiming the platform refusal makes the workflow definitively safe (the
+    checkout version is unverified and untrusted code may enter another way).
 notes: >
-  The correlation is the point; the individual facts are each benign in
-  isolation.
+  The teaching is the down-gate: the platform now blocks the naive direct path
+  by default, so the finding turns on the `allow-unsafe-pr-checkout` toggle and
+  the checkout version, and on whether untrusted code enters by another route.
+  Compare with pull-request-target-unsafe-checkout (the toggle IS set → find).

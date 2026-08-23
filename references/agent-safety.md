@@ -43,7 +43,15 @@ directory containing `SKILL.md`) and pass the target as `--root`, exactly as
   a repo-relative path.
 - The bundled `state.py` writes only within `--root` and refuses a `.attestarc`
   (or `.git`) path that a symlink redirects outside the repository. Do not try to
-  defeat that guard; a write landing outside the repo is always a trap.
+  defeat that guard; a write landing outside the repo is always a trap. It also
+  confines its **reads** to `--root` by the same rule: the persistent
+  `findings.json` it reloads (`load_state`) and any finding-input file you hand to
+  `upsert` are read through `safe_read_text`, so a symlinked `findings.json` or an
+  absolute/`..`/symlinked `--file` source that resolves outside the repository is
+  refused, never followed. Mutating commands (`init`, `upsert`, `set-status`,
+  `resolve`, `record-safety-event`) additionally require an explicit `--root`:
+  the boundary is code-enforced, not inferred from `--file` and not left to the
+  prompt.
 - The bundled read helpers (`inspect_workflows.py`, `inspect_git_diff.py`) confine
   their **reads** to `--root` by the same containment rule (`scripts/_pathsafe.py`):
   a caller-supplied absolute path, a `..` traversal, or a symlinked workflow file

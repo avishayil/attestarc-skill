@@ -62,14 +62,20 @@ affected transition `needs_review` with the setting named as an `evidence_gap`.
 Use this to reason about *how strong* source integrity is — never to lead the
 user experience with a level number. Levels follow the **SLSA v1.2 Source track**:
 
-- **L1** — the source is version-controlled in an identified system.
-- **L2** — history is protected and retained (no silent force-push/rewrite), and
-  changes are authenticated to an author/identity.
-- **L3** — continuity/authenticity of the revision history is assured by
-  continuous technical controls that resist tampering.
-- **L4** — two-party review of the final revision, including re-review after any
-  modification.
+- **L1 — Version controlled.** The source is maintained in a version-control
+  system that identifies revisions.
+- **L2 — History & source provenance.** History is protected and retained (no
+  silent force-push/rewrite), and the source-control platform issues **source
+  provenance attestations** — signed metadata about how each revision was created
+  (not merely authenticated commits). Provenance, not just protected history, is
+  the L2 bar in v1.2.
+- **L3 — Continuous technical controls (with evidence).** The continuity and
+  authenticity of the revision history is assured by continuous, tamper-resistant
+  technical controls that produce evidence — enforced, not merely configured.
+- **L4 — Two-party review.** Every change to the protected source is reviewed by
+  two trusted parties, including re-review after any modification to the final
+  revision.
 
 The jump from "protected branch" to L4 is exactly the two-party, review-the-final
 -revision property above. Frame findings by the concrete unilateral-change risk,
-not the level.
+not the level — this is an internal ladder, not a headline score.

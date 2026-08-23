@@ -26,4 +26,6 @@ prohibit:
     primitive.
 notes: >
   The dangerous-pr-target fixture is a natural base; add an `actions/cache`
-  restore step. See references/github-actions.md cache section.
+  restore step. See the cache write-scope decision tree in
+  references/github-actions.md: low-trust triggers (`pull_request_target`,
+  `issue_comment`, `workflow_run`) sit at the read-only branch of the tree.

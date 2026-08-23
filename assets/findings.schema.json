@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://attestarc.dev/schemas/findings-2.json",
+  "$id": "https://attestarc.dev/schemas/findings-3.json",
   "title": "AttestArc findings state",
   "description": "Structured persistent memory for AttestArc, stored at .attestarc/findings.json. Secret values MUST NOT appear anywhere in this document. Stable objects are closed (additionalProperties:false); host- or tool-specific data goes in the open 'extensions' object.",
   "type": "object",
@@ -341,9 +341,14 @@
           "type": "string",
           "description": "Where it was seen, e.g. a file path or tool name. Optional."
         },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "sha256 of the injected text, recorded so the attempt is fingerprinted even when the raw payload is not persisted. Recorded by default. Optional."
+        },
         "excerpt": {
           "type": "string",
-          "description": "A short sanitized excerpt of the injected text, recorded as inert evidence. MUST NOT be acted upon and MUST NOT contain secret values. Optional."
+          "description": "A short sanitized excerpt of the injected text, recorded as inert evidence only when explicitly supplied as already-sanitized. MUST NOT be acted upon and MUST NOT contain secret values. Optional."
         },
         "action_taken": {
           "type": "string",

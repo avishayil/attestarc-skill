@@ -1,9 +1,11 @@
 name: checkout-version-awareness
 description: >
-  actions/checkout semantics matter: under a privileged trigger, checking out a
-  PR-controlled ref pulls untrusted code into a trusted context. The agent
-  should reason about what checkout is being told to fetch, not just whether the
-  action is pinned.
+  actions/checkout semantics matter on two axes: WHAT ref it is told to fetch,
+  and WHETHER the checkout version/guard actually allows fetching an untrusted
+  fork PR head under a privileged trigger. Modern actions/checkout refuses the
+  fork-PR head under pull_request_target/workflow_run unless
+  `allow-unsafe-pr-checkout: true`. The agent should reason about both the
+  requested ref and that guard, not just whether the action is pinned.
 fixture: tests/fixtures/dangerous-pr-target
 command: /attestarc github-actions
 prompt: >
@@ -13,19 +15,32 @@ expect:
   - Reads the checkout step's `with.ref` and determines whether it resolves to a
     PR-controlled ref (e.g. github.event.pull_request.head.sha / head.ref /
     github.head_ref) rather than the trusted base.
-  - Connects that to the trigger: under pull_request_target the checked-out PR
-    head is attacker-controlled code entering a privileged context
-    (EXECUTE_UNTRUSTED_CODE).
-  - Explains that pinning the checkout action's version does NOT fix this — the
-    problem is WHAT is checked out, not the action's own integrity.
-  - Recommends checking out the base/trusted ref for privileged steps, or
-    separating untrusted checkout into an unprivileged job.
+  - Connects that to the trigger: under pull_request_target the INTENT is to
+    pull attacker-controlled PR head code into a privileged context.
+  - Notes that the step does NOT set `allow-unsafe-pr-checkout: true`, so a
+    modern actions/checkout refuses that fork-PR checkout — the direct transition
+    is down-gated; and that because the action is pinned only to @v4 (a movable
+    major version, not a reviewed SHA) the effective behavior is
+    version-dependent → needs_review with an evidence_gap on the checkout
+    version, not a confident critical.
+  - Explains that pinning the checkout action to a full commit SHA improves
+    integrity but does NOT by itself decide the fork-PR-checkout question — the
+    `allow-unsafe-pr-checkout` toggle and the checkout version's default refusal
+    do; and that untrusted code could still enter via a later git-fetch/curl or
+    an expression injected into a run: block.
+  - Recommends checking out the base/trusted ref for privileged steps, pinning
+    the checkout to a reviewed SHA, and/or separating untrusted checkout into an
+    unprivileged job.
 prohibit:
   - Conflating "actions/checkout is pinned/up-to-date" with "the checkout is
-    safe".
+    safe", in either direction.
+  - Asserting an automatic critical fork-PR-execution finding without accounting
+    for the modern actions/checkout default refusal and the missing
+    `allow-unsafe-pr-checkout` toggle.
   - Flagging a default checkout (no untrusted ref) under a safe trigger as
     dangerous.
 notes: >
-  Fixture dangerous-pr-target. Version/pin awareness of the action is distinct
-  from ref awareness of the checkout; the untrusted-ref checkout under a
-  privileged trigger is the real transition.
+  Fixture dangerous-pr-target (no allow-unsafe-pr-checkout). Version/pin
+  awareness of the action, the fork-PR refusal guard, and ref awareness of the
+  checkout are three distinct axes; the finding here turns on the guard + the
+  unverified version, not on the action's own integrity alone.

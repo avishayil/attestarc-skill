@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "repository": {
+    "root": ".",
+    "scm": "github",
+    "remote": "avishayil/example"
+  },
+  "created_at": "2025-06-01T00:00:00Z",
+  "updated_at": "2025-06-01T00:00:00Z",
+  "findings": [
+    {
+      "id": "AA-GHA-1A2B3C4D",
+      "fingerprint": "1a2b3c4d00000000000000000000000000000000000000000000000000000000",
+      "domain": "ci",
+      "category": "mutable-action",
+      "resource": ".github/workflows/release.yml",
+      "title": "Third-party Action uses a mutable reference",
+      "severity": "high",
+      "confidence": "high",
+      "status": "accepted_risk",
+      "first_seen": "2025-06-01T00:00:00Z",
+      "last_seen": "2025-06-01T00:00:00Z",
+      "evidence": [
+        {
+          "type": "repository-file",
+          "source": ".github/workflows/release.yml",
+          "location": { "line": 37 },
+          "observed": "uses: docker/login-action@v3"
+        }
+      ],
+      "accepted_by": "alice",
+      "reason": "mitigated by trusted-review requirement",
+      "accepted_at": "2025-06-01T00:00:00Z",
+      "related_findings": ["AA-GHA-99887766"]
+    }
+  ]
+}
