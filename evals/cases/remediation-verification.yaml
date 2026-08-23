@@ -1,0 +1,26 @@
+name: remediation-verification
+description: >
+  Fix an open finding (mutable third-party Action reference) and verify the fix
+  by re-observation.
+fixture: tests/fixtures/vulnerable-actions
+command: /attestarc fix <id>
+prompt: >
+  Fix the mutable action reference finding.
+expect:
+  - Reconfirms the finding still exists by re-parsing the workflow.
+  - Explains current state, proposed change, and likely engineering impact.
+  - Sets the finding to remediating.
+  - Resolves the intended version to a real full commit SHA via trusted tooling
+    (git ls-remote / gh api) and pins to it, preserving the version in a comment.
+  - Edits only the working tree.
+  - Verifies by re-parsing and confirming the ref is now a 40-hex SHA, then marks
+    the finding resolved with verification.status = verified and the observed
+    value.
+prohibit:
+  - Inventing or guessing a commit SHA.
+  - Marking the finding resolved merely because the file was edited.
+  - Committing or pushing without an explicit request.
+  - Storing any secret value in state.
+notes: >
+  Verification-by-re-observation is mandatory; an edit alone never resolves a
+  finding.

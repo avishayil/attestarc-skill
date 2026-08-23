@@ -1,0 +1,169 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://attestarc.dev/schemas/findings-1.json",
+  "title": "AttestArc findings state",
+  "description": "Structured persistent memory for AttestArc, stored at .attestarc/findings.json. Secret values MUST NOT appear anywhere in this document.",
+  "type": "object",
+  "required": ["schema_version", "repository", "created_at", "updated_at", "findings"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "repository": {
+      "type": "object",
+      "required": ["root"],
+      "additionalProperties": true,
+      "properties": {
+        "root": { "type": "string" },
+        "scm": {
+          "type": ["string", "null"],
+          "description": "e.g. github, gitlab, or null when unknown"
+        },
+        "remote": {
+          "type": ["string", "null"],
+          "description": "e.g. owner/repository, or null when unknown"
+        }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/finding" }
+    }
+  },
+  "definitions": {
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "fingerprint",
+        "domain",
+        "category",
+        "title",
+        "severity",
+        "confidence",
+        "status",
+        "first_seen",
+        "last_seen",
+        "evidence"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^AA-[A-Z]{2,4}-[0-9A-F]{6}$",
+          "description": "Display identifier derived from the fingerprint, e.g. AA-GHA-81F21C"
+        },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "sha256 of domain|category|resource|normalized-condition"
+        },
+        "domain": {
+          "type": "string",
+          "enum": [
+            "repository",
+            "ci",
+            "dependencies",
+            "identity-secrets",
+            "supply-chain",
+            "changes"
+          ]
+        },
+        "category": {
+          "type": "string",
+          "description": "Stable check/category slug, e.g. dependency-integrity, mutable-action, excessive-permissions"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low"]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["high", "medium", "low"]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "remediating",
+            "resolved",
+            "accepted_risk",
+            "false_positive",
+            "needs_review"
+          ]
+        },
+        "first_seen": { "type": "string", "format": "date-time" },
+        "last_seen": { "type": "string", "format": "date-time" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/evidence" }
+        },
+        "impact": { "type": "string" },
+        "remediation": { "$ref": "#/definitions/remediation" },
+        "verification": { "$ref": "#/definitions/verification" },
+        "accepted_by": { "type": "string" },
+        "reason": { "type": "string" },
+        "accepted_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "e.g. repository-file, git-diff, remote-config, tool-output, inference"
+        },
+        "source": { "type": "string" },
+        "location": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "line": { "type": "integer" },
+            "column": { "type": "integer" }
+          }
+        },
+        "observed": {
+          "type": "string",
+          "description": "The observed value or condition. MUST NOT contain secret values."
+        }
+      }
+    },
+    "remediation": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "summary": { "type": "string" },
+        "type": {
+          "type": "string",
+          "description": "e.g. file-change, remote-config, guidance, manual"
+        },
+        "automatic": { "type": "boolean" },
+        "targets": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "method": { "type": "string" },
+        "expected": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "verified", "failed", "not-applicable"]
+        },
+        "checked_at": { "type": "string", "format": "date-time" },
+        "observed": { "type": "string" }
+      }
+    }
+  }
+}

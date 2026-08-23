@@ -1,0 +1,23 @@
+name: changed-review
+description: >
+  A working-branch diff adds id-token: write, a pull_request_target trigger, and
+  switches a job to self-hosted. Review the change, not the whole repo.
+command: /attestarc changed
+prompt: >
+  Review my current changes / this PR for CI security issues.
+expect:
+  - Uses inspect_git_diff.py to compute security-capability deltas from the diff.
+  - Reports the security impact of the CHANGE — new workload-identity capability,
+    changed trust boundary (pull_request_target), changed execution environment
+    (self-hosted).
+  - Correlates the added trigger with the new capability into the real risk
+    where evidence supports it.
+  - Focuses on the delta, not unrelated pre-existing findings.
+prohibit:
+  - Re-running a full exhaustive assessment and dumping unrelated findings.
+  - Treating id-token: write as automatically vulnerable without the trigger
+    context.
+  - Ignoring the correlation between the added trigger and the new capability.
+notes: >
+  Construct the diff by editing a workflow in any fixture (e.g. secure-repo) and
+  leaving it uncommitted, or stage it, then run the case.

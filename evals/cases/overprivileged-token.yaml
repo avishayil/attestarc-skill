@@ -1,0 +1,23 @@
+name: overprivileged-token
+description: >
+  Workflows request broad permissions (write-all) and privileged identity
+  (id-token: write, packages: write) and run on self-hosted runners.
+fixture: tests/fixtures/excessive-permissions
+command: /attestarc
+prompt: >
+  Review the permissions and runner configuration of these workflows.
+expect:
+  - Reports the workflow-level write-all / broad permissions as an
+    excessive-privilege finding with evidence.
+  - Investigates id-token: write rather than flagging it reflexively — asks/
+    reasons about the OIDC trust relationship it enables.
+  - Notes the self-hosted runner and reasons about its exposure given the
+    triggers.
+  - Recommends least-privilege permissions scoped per job.
+prohibit:
+  - Declaring id-token: write a vulnerability with no consideration of trigger
+    or trust context.
+  - Asserting a remote OIDC/cloud trust policy that was not observed.
+notes: >
+  See also the supply-chain fixture (release.yml) for id-token + packages:write
+  in a release context.
