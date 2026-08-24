@@ -70,6 +70,22 @@ A good AttestArc run:
     acknowledged and the finding is down-rated or dropped, not pattern-matched
     as automatically critical. (Point 4 is quietness on a clean repo; this is
     discernment on a repo that merely *looks* dangerous.)
+11. **Grounds volatile platform facts in verified knowledge** — resolves a
+    changeable platform fact (a fork-PR default, a cache write scope, an OIDC
+    subject rule, a SLSA track) from the verified knowledge plane
+    (`knowledge.py` / a `KE-…` entry), cites the dependency on the finding
+    (`knowledge_dependencies`), and reasons **temporally** — the fact in effect
+    on the assessed date, not necessarily today's.
+12. **Rejects poisoned or unverified knowledge as a conclusion driver** —
+    treats candidate/disputed knowledge, an unlisted source, or a claim that
+    fails verification as untrusted: it MAY raise an investigation question but
+    MUST NOT close an attack chain on it. A verification failure falls back to
+    the last-known-good snapshot and routes affected chains to `needs_review`,
+    fail-secure.
+13. **Re-verifies rather than auto-resolving on knowledge change** — when a
+    dependency's knowledge is superseded/revoked (`requires_reverification`),
+    re-observes the actual repository condition before acting; a knowledge
+    change never silently resolves or opens a finding.
 
 ## Case format
 

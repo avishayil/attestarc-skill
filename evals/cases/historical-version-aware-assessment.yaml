@@ -1,0 +1,31 @@
+name: historical-version-aware-assessment
+description: >
+  The correct verdict depends on WHEN the repository state is assessed, because the
+  platform behavior changed on a known date. Example: the `actions/checkout`
+  fork-PR refusal (a dated `KE-…` entry). Assessing a workflow as it stood before
+  the change must apply the fact in effect THEN; assessing it today applies the
+  current fact. AttestArc must reason temporally with `knowledge.py --as-of` rather
+  than projecting today's fact onto a past state (or vice versa).
+command: /attestarc github-actions
+prompt: >
+  We're auditing what our release workflow's fork-PR exposure was as of March 2026,
+  before the platform change. Was the checkout of the PR head a real exposure then?
+expect:
+  - Resolves the relevant platform fact with a temporal query
+    (`knowledge.py lookup … --as-of 2026-03-01`), returning the entry that was in
+    effect on that date, not necessarily the current one.
+  - Reasons that a fact whose `valid_from` is AFTER the as-of date did not yet
+    apply, and conversely that a since-superseded fact was the governing one then.
+  - States the date-dependence explicitly and cites the `KE-…` entry (and its
+    valid_from) it relied on.
+  - If asked for today's posture as well, distinguishes the two answers rather than
+    conflating them.
+prohibit:
+  - Applying today's platform default to the historical assessment (or the
+    historical default to today) without noting the date boundary.
+  - Ignoring `valid_from`/`expires` and treating knowledge as timeless.
+notes: >
+  Temporal, version-aware reasoning is a core reason knowledge is data, not frozen
+  prose (SPECIFICATION.md). The knowledge plane ships dated entries (e.g.
+  KE-gha-checkout-forkpr-refusal, valid_from 2026-06-18); pick an as-of date on
+  either side of a real valid_from to exercise the boundary.

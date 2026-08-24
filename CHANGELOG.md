@@ -3,6 +3,51 @@
 All notable changes to AttestArc are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-08-24
+
+**The first structural minor: a self-evolving architecture.** AttestArc splits
+into a small, durable reasoning **kernel** backed by a signed, temporal,
+provenance-aware **knowledge plane** and an eval-gated **evolution** loop — without
+the running assessor ever rewriting its own reasoning or trusting unverified
+knowledge. Volatile platform facts (fork-PR defaults, cache write scopes, OIDC
+subject semantics, SLSA tracks) no longer live frozen in prose; they are dynamic,
+dated, verifiable data. Helpers stay stdlib-only; the assessor stays read-only and
+offline. See `SPECIFICATION.md` and `THREAT_MODEL.md`.
+
+### Added
+
+- **Kernel / knowledge split.** Durable cross-cutting reasoning moves to `core/`
+  (`methodology`, `capabilities`, `severity`, `evidence`, `agent-safety`,
+  `remediation`, `promotion-policy`); domain files in `references/` now cite
+  volatile facts by `KE-…` id instead of baking them in.
+- **Verified-knowledge plane** (`knowledge/`): signed, versioned, temporal,
+  provenance-backed JSONL packs (`bootstrap/`) plus TUF-inspired role metadata
+  (`root`/`timestamp`/`snapshot`/`targets.json`) and a source registry
+  (`sources.yaml`). `schemas/knowledge*.schema.json` define the contracts.
+- **Offline lookup + verification helpers.** `scripts/knowledge.py`
+  (status/lookup/explain/index; temporal `--as-of`, status-aware) and
+  `scripts/knowledge_verify.py` (deterministic verify chain: integrity, freshness,
+  snapshot/timestamp consistency, threshold SSH signatures via
+  `ssh-keygen -Y verify`, rollback/freeze rejection; fail-secure fallback to the
+  last-known-good bundled snapshot). No network, no Python crypto dependency.
+- **Findings ↔ knowledge dependencies.** `schemas/findings.schema.json` →
+  schema_version 4 (additive): `finding.knowledge_dependencies[]`. `state.py`
+  gains a read-time `requires_reverification` view and a `reverify` command — a
+  knowledge change marks dependents for re-observation and **never** silently
+  resolves a finding.
+- **Updater principal** (`/attestarc knowledge refresh`): the only network-facing
+  mode, isolated from the assessor. `scripts/knowledge_compile.py` provides the
+  deterministic steps (registry-derived authority, quarantine, schema/provenance/
+  secret validation, conflict detection, and the deterministic promotion-tier
+  decision). The model may propose; only the policy promotes.
+- **Evolver scaffolding** (`evolution/`, not shipped): `LearningCandidate` schema,
+  the PR-gated evolution workflow and prompts, and
+  `.github/workflows/release-knowledge.yml` (build/sign/publish packs + a
+  revocation kill switch). The eval corpus is root-of-trust; changes are additive.
+- **New evals**: knowledge-provenance, superseded-triggers-reverification,
+  poisoned-knowledge-rejected, historical version-aware assessment, and
+  candidate-knowledge-does-not-change-conclusion.
+
 ## [0.4.1] — 2026-08-23
 
 **Public Preview — GitHub & GitHub Actions.** A correctness pass on top of 0.4.0,

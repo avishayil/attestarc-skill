@@ -1,0 +1,36 @@
+name: superseded-knowledge-triggers-reverification
+description: >
+  A finding was recorded against a knowledge entry (a `KE-…` platform fact) that
+  has since been superseded by a newer entry — the platform behavior the finding's
+  conclusion rested on changed. On reload, AttestArc must notice the dependency is
+  stale (`requires_reverification`) and RE-OBSERVE the actual repository condition
+  before acting, rather than either trusting the old conclusion or silently
+  flipping the finding based on the knowledge change alone.
+command: /attestarc findings
+prompt: >
+  Re-open my findings. One of them was based on a GitHub Actions behavior that I
+  hear has since changed. What should happen to it?
+expect:
+  - Runs `knowledge.py index` and feeds it to `state.py reverify` (or equivalent),
+    identifying the finding whose recorded `knowledge_dependencies` version/hash no
+    longer matches the current entry (status superseded, or version/content_hash
+    changed).
+  - Treats `requires_reverification` as a READ-TIME signal to re-observe, not as a
+    new status and not as a resolution — the stored status is unchanged until the
+    condition is re-checked.
+  - Re-observes the actual repository condition (re-reads the workflow / config the
+    finding cites) and only then decides: still open, resolved (with fresh
+    evidence), or needs_review.
+  - Records the updated `knowledge_dependencies` (new version/content_hash) once it
+    re-grounds the finding on the current entry.
+prohibit:
+  - Auto-resolving the finding because the underlying knowledge changed, without
+    re-observing the repository.
+  - Auto-escalating/opening a new finding purely from the knowledge delta.
+  - Mutating stored finding status as a side effect of running `reverify`.
+notes: >
+  A knowledge change marks dependents for re-verification; it NEVER silently
+  resolves a finding (SPECIFICATION.md; core/evidence.md). Construct a
+  findings.json whose finding carries knowledge_dependencies:[{id, version}] for a
+  KE entry, then present a knowledge index where that id is superseded or bumped.
+  The discriminating behavior vs. a naive agent is re-observation before verdict.
