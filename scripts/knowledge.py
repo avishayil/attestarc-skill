@@ -41,6 +41,7 @@ import os
 import sys
 from datetime import date, datetime
 
+import knowledge_verify
 from _pathsafe import PathEscapeError, resolve_within_root
 
 _PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,21 +70,20 @@ def content_hash(entry: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _load_targets(knowledge_root: str) -> dict:
-    """Map pack filename -> version from targets.json, if present. Best-effort."""
-    path = os.path.join(knowledge_root, "targets.json")
+def _load_manifest_version(knowledge_root: str) -> str:
+    """The release version pins every pack in one atomic manifest, so all packs in
+    a snapshot share the manifest version. Best-effort; 'bootstrap' if absent."""
+    path = os.path.join(knowledge_root, "manifest.json")
     if not os.path.exists(path):
-        return {}
+        return "bootstrap"
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError):
-        return {}
-    out = {}
-    for t in data.get("targets", []) if isinstance(data, dict) else []:
-        if isinstance(t, dict) and "name" in t:
-            out[os.path.basename(t["name"])] = str(t.get("version", "0"))
-    return out
+        return "bootstrap"
+    if isinstance(data, dict) and data.get("version") is not None:
+        return str(data.get("version"))
+    return "bootstrap"
 
 
 def load_packs(knowledge_root: str) -> tuple[list[dict], list[dict]]:
@@ -98,13 +98,12 @@ def load_packs(knowledge_root: str) -> tuple[list[dict], list[dict]]:
     entries: list[dict] = []
     summaries: list[dict] = []
     pattern = os.path.join(knowledge_root, "bootstrap", "*.jsonl")
-    targets = _load_targets(knowledge_root)
+    version = _load_manifest_version(knowledge_root)
     for path in sorted(glob.glob(pattern)):
         _, _, ok = resolve_within_root(path, root_real)
         if not ok:
             continue  # a symlink escaping the knowledge root: never follow it
         name = os.path.basename(path)
-        version = targets.get(name, "bootstrap")
         count = 0
         parse_partial = False
         try:
@@ -150,9 +149,59 @@ def _public(entry: dict) -> dict:
     return {k: v for k, v in entry.items() if not k.startswith("_")}
 
 
+def _applicability(entry: dict, context: dict | None) -> str:
+    """Evaluate the entry's ``applies_to`` scope against an explicit assessment
+    context. Returns ``applicable`` | ``not-applicable`` | ``unknown``.
+
+    A conclusion-driving fact must be scoped to the situation being assessed; the
+    assessor is not trusted to remember to interpret ``applies_to`` by hand. An
+    entry with no scope constraints is unconstrained (``applicable``). If a
+    constraint is present but the context does not supply that dimension, the
+    result is ``unknown`` — the assessor must resolve it, not assume it applies.
+    """
+    at = entry.get("applies_to") or {}
+    context = context or {}
+    dims = []  # per-constraint verdicts
+
+    def match(present, supplied, ok):
+        if not present:
+            return None            # no constraint on this dimension
+        if supplied in (None, "", []):
+            return "unknown"       # constrained, but context is silent
+        return "applicable" if ok else "not-applicable"
+
+    prod = at.get("product")
+    dims.append(match(prod is not None, context.get("product"),
+                      prod == context.get("product")))
+
+    events = at.get("events") or ([at["event"]] if at.get("event") else None)
+    dims.append(match(events, context.get("event"),
+                      context.get("event") in (events or [])))
+
+    action = at.get("action")
+    cact = context.get("action")
+    action_ok = bool(cact) and (cact == action or cact.startswith(f"{action}@")
+                                or cact.startswith(f"{action}/"))
+    dims.append(match(action is not None, cact, action_ok))
+
+    ver = at.get("version")
+    dims.append(match(ver is not None, context.get("version"),
+                      str(ver) == str(context.get("version"))))
+
+    dims = [d for d in dims if d is not None]
+    if not dims:
+        return "applicable"        # unconstrained fact
+    if "not-applicable" in dims:
+        return "not-applicable"
+    if "unknown" in dims:
+        return "unknown"
+    return "applicable"
+
+
 def lookup(entries, *, platform=None, subject=None, topic=None, as_of=None,
-           include_noncurrent=False):
-    """Return matching entries as of ``as_of`` (default today), status-aware."""
+           context=None, include_noncurrent=False):
+    """Return matching entries as of ``as_of`` (default today), status- and
+    applicability-aware. ``context`` is ``{product, event, action, version}``."""
     as_of = _parse_date(as_of) or date.today()
     hits = []
     for e in entries:
@@ -172,14 +221,89 @@ def lookup(entries, *, platform=None, subject=None, topic=None, as_of=None,
         out = _public(e)
         out["version"] = e.get("_version")
         out["content_hash"] = e.get("_content_hash")
-        # A disputed/candidate entry may inform questions but not drive a
-        # conclusion — flag it so the assessor routes to needs_review.
+        applicability = _applicability(e, context)
+        out["applicability"] = applicability
+        # A conclusion needs: active status, trusted confidence, AND a fact whose
+        # scope actually applies to the assessed context. A disputed/candidate
+        # entry, or one whose scope does not apply (or cannot be confirmed to),
+        # may inform questions but must not close a chain.
         out["drives_conclusion"] = (
             status == "active"
-            and e.get("confidence") in _ACTIVE_CONFIDENCES)
+            and e.get("confidence") in _ACTIVE_CONFIDENCES
+            and applicability == "applicable")
         hits.append(out)
     hits.sort(key=lambda h: h.get("id") or "")
     return hits
+
+
+def check_consistency(entries) -> dict:
+    """Validate the pack SET as a coherent whole before it is trusted for reasoning.
+
+    A verified snapshot is more than a bag of individually-valid entries: two
+    active-authoritative entries must not contradict each other for an overlapping
+    scope, a superseded entry must not still be active, and ``supersedes`` targets
+    must exist. On any conflict the affected subjects fail closed — the assessor
+    routes them to ``needs_review`` rather than letting either claim drive.
+    """
+    conflicts = []
+    by_id = {}
+    for e in entries:
+        eid = e.get("id")
+        if eid in by_id:
+            conflicts.append({"kind": "duplicate-id", "id": eid})
+        else:
+            by_id[eid] = e
+
+    superseded_ids = set()
+    for e in entries:
+        for sid in e.get("supersedes") or []:
+            superseded_ids.add(sid)
+            if sid not in by_id:
+                conflicts.append({"kind": "dangling-supersedes",
+                                  "id": e.get("id"), "target": sid})
+    for sid in superseded_ids:
+        tgt = by_id.get(sid)
+        if tgt is not None and tgt.get("status") == "active":
+            conflicts.append({"kind": "superseded-still-active", "id": sid})
+
+    # Contradictory active-authoritative claims occupying the SAME single-valued
+    # slot. A slot is declared explicitly via ``claim_key`` (e.g. the
+    # pull_request_target fork-token default): two active-authoritative entries
+    # with the same claim_key, overlapping scope, but different claims cannot both
+    # be true. Complementary facts about one subject do NOT share a claim_key and
+    # are never flagged — this avoids false positives while still catching the
+    # classic poisoning shape ("X is writable" vs "X is read-only").
+    active_auth = [e for e in entries
+                   if e.get("status") == "active"
+                   and e.get("confidence") == "authoritative"
+                   and e.get("claim_key")]
+    for i in range(len(active_auth)):
+        for j in range(i + 1, len(active_auth)):
+            a, b = active_auth[i], active_auth[j]
+            if (a.get("claim_key") == b.get("claim_key")
+                    and a.get("claim") != b.get("claim")
+                    and _scopes_overlap(a, b)
+                    and b.get("id") not in (a.get("supersedes") or [])
+                    and a.get("id") not in (b.get("supersedes") or [])):
+                conflicts.append({"kind": "contradictory-active",
+                                  "ids": sorted([a.get("id"), b.get("id")]),
+                                  "claim_key": a.get("claim_key")})
+    return {"consistent": not conflicts, "conflicts": conflicts}
+
+
+def _scopes_overlap(a: dict, b: dict) -> bool:
+    """Two entries' applies_to scopes overlap if, for every dimension both
+    constrain, the constraints intersect. Missing constraint = wildcard."""
+    aa, ba = a.get("applies_to") or {}, b.get("applies_to") or {}
+    for key in ("product", "action", "version"):
+        av, bv = aa.get(key), ba.get(key)
+        if av is not None and bv is not None and str(av) != str(bv):
+            return False
+    ae = set(aa.get("events") or [])
+    be = set(ba.get("events") or [])
+    if ae and be and not (ae & be):
+        return False
+    return True
 
 
 def build_index(entries) -> dict:
@@ -194,6 +318,28 @@ def build_index(entries) -> dict:
     return index
 
 
+def open_verified(knowledge_root=None, now=None):
+    """The assessor-facing read path. Verify the snapshot BEFORE any entry can be
+    returned as conclusion-driving, and validate the set is consistent.
+
+    Returns ``(entries, verification, consistency)``. If verification fails, the
+    returned entries carry ``drives_conclusion=false`` and a ``verification``
+    marker so a poisoned/unverified snapshot cannot close a chain. If the set is
+    inconsistent, conclusion-driving is likewise withheld (route to needs_review).
+    This is the only path the assessor should use; ``load_packs`` is raw and is
+    reserved for tests and the compiler.
+    """
+    root = knowledge_root or _DEFAULT_KNOWLEDGE_ROOT
+    verification = knowledge_verify.verify_installed(knowledge_root=root, now=now)
+    entries, _ = load_packs(os.path.abspath(root))
+    consistency = check_consistency(entries)
+    trusted = bool(verification.get("trusted")) and consistency.get("consistent")
+    if not trusted:
+        for e in entries:
+            e["_untrusted"] = True
+    return entries, verification, consistency
+
+
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
@@ -202,6 +348,13 @@ def _resolve_root(args) -> str:
     if not os.path.isdir(root):
         raise KnowledgeError(f"knowledge root not found: {root}")
     return os.path.abspath(root)
+
+
+def _context_from_args(args) -> dict:
+    return {"product": getattr(args, "product", None),
+            "event": getattr(args, "event", None),
+            "action": getattr(args, "action", None),
+            "version": getattr(args, "context_version", None)}
 
 
 def cmd_status(args) -> int:
@@ -230,11 +383,25 @@ def cmd_status(args) -> int:
 
 def cmd_lookup(args) -> int:
     root = _resolve_root(args)
-    entries, _ = load_packs(root)
+    if args.allow_unverified:
+        entries, _ = load_packs(root)
+        verification = {"trusted": None, "source": "unverified (--allow-unverified)"}
+        consistency = check_consistency(entries)
+    else:
+        entries, verification, consistency = open_verified(
+            knowledge_root=root, now=args.as_of)
     hits = lookup(entries, platform=args.platform, subject=args.subject,
                   topic=args.topic, as_of=args.as_of,
+                  context=_context_from_args(args),
                   include_noncurrent=args.include_noncurrent)
-    print(json.dumps(hits, indent=2, sort_keys=True))
+    trusted = (verification.get("trusted") is not False) and consistency.get("consistent")
+    if not trusted:
+        # Verification failed or the set is inconsistent: no entry may drive a
+        # conclusion. Fail secure — surface the facts and withhold conclusion.
+        for h in hits:
+            h["drives_conclusion"] = False
+    out = {"verification": verification, "consistency": consistency, "hits": hits}
+    print(json.dumps(out, indent=2, sort_keys=True))
     return 0
 
 
@@ -273,13 +440,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_status)
 
     sp = sub.add_parser("lookup", parents=[common],
-                        help="find in-effect entries (temporal + status-aware)")
+                        help="find in-effect entries (temporal + status- + "
+                             "applicability-aware; verified before use)")
     sp.add_argument("--platform")
     sp.add_argument("--subject")
     sp.add_argument("--topic", help="keyword matched in subject/claim")
     sp.add_argument("--as-of", help="YYYY-MM-DD; temporal query (default today)")
+    # Assessment context — a fact drives a conclusion only if its applies_to scope
+    # matches the situation being assessed.
+    sp.add_argument("--product", help="e.g. github.com / GHES")
+    sp.add_argument("--event", help="e.g. pull_request_target")
+    sp.add_argument("--action", help="e.g. actions/checkout")
+    sp.add_argument("--context-version", dest="context_version",
+                    help="platform/action version of the assessed context")
     sp.add_argument("--include-noncurrent", action="store_true",
                     help="also return superseded/retired/draft entries")
+    sp.add_argument("--allow-unverified", action="store_true",
+                    help="skip the verification gate (tests/tooling ONLY; never "
+                         "for assessment)")
     sp.set_defaults(func=cmd_lookup)
 
     sp = sub.add_parser("explain", parents=[common],

@@ -163,6 +163,120 @@ def test_symlinked_pack_escaping_root_is_not_followed(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# applies_to enforcement (Workstream B): a fact must be scoped to the assessed
+# context before it can drive a conclusion.
+# --------------------------------------------------------------------------- #
+def test_out_of_scope_context_is_not_applicable(tmp_path):
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [
+        _entry(id="KE-prt", subject="pull_request_target",
+               applies_to={"events": ["pull_request_target"]}),
+    ])
+    entries, _ = knowledge.load_packs(root)
+    hits = knowledge.lookup(entries, subject="pull_request_target",
+                            context={"event": "push"})
+    assert hits[0]["applicability"] == "not-applicable"
+    assert hits[0]["drives_conclusion"] is False
+
+
+def test_in_scope_context_drives_conclusion(tmp_path):
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [
+        _entry(id="KE-prt", subject="pull_request_target",
+               applies_to={"events": ["pull_request_target"]}),
+    ])
+    entries, _ = knowledge.load_packs(root)
+    hits = knowledge.lookup(entries, subject="pull_request_target",
+                            context={"event": "pull_request_target"})
+    assert hits[0]["applicability"] == "applicable"
+    assert hits[0]["drives_conclusion"] is True
+
+
+def test_constrained_but_silent_context_is_unknown(tmp_path):
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [
+        _entry(id="KE-prt", subject="pull_request_target",
+               applies_to={"events": ["pull_request_target"]}),
+    ])
+    entries, _ = knowledge.load_packs(root)
+    hits = knowledge.lookup(entries, subject="pull_request_target", context={})
+    assert hits[0]["applicability"] == "unknown"
+    assert hits[0]["drives_conclusion"] is False
+
+
+def test_action_prefix_matches_pinned_ref(tmp_path):
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [
+        _entry(id="KE-co", subject="checkout",
+               applies_to={"action": "actions/checkout"}),
+    ])
+    entries, _ = knowledge.load_packs(root)
+    hits = knowledge.lookup(entries, subject="checkout",
+                            context={"action": "actions/checkout@v4"})
+    assert hits[0]["applicability"] == "applicable"
+
+
+# --------------------------------------------------------------------------- #
+# check_consistency (Workstream B/G): the pack SET must be coherent before trust.
+# --------------------------------------------------------------------------- #
+def test_contradictory_active_claim_key_is_inconsistent(tmp_path):
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [
+        _entry(id="KE-a", claim="writable", claim_key="gha.cache.default"),
+        _entry(id="KE-b", claim="read-only", claim_key="gha.cache.default"),
+    ])
+    entries, _ = knowledge.load_packs(root)
+    result = knowledge.check_consistency(entries)
+    assert result["consistent"] is False
+    assert any(c["kind"] == "contradictory-active" for c in result["conflicts"])
+
+
+def test_complementary_facts_without_claim_key_are_consistent(tmp_path):
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [
+        _entry(id="KE-a", subject="oidc", claim="claims are immutable"),
+        _entry(id="KE-b", subject="oidc", claim="aud must be validated"),
+    ])
+    entries, _ = knowledge.load_packs(root)
+    assert knowledge.check_consistency(entries)["consistent"] is True
+
+
+def test_superseded_still_active_is_inconsistent(tmp_path):
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [
+        _entry(id="KE-old", status="active"),
+        _entry(id="KE-new", supersedes=["KE-old"]),
+    ])
+    entries, _ = knowledge.load_packs(root)
+    result = knowledge.check_consistency(entries)
+    assert result["consistent"] is False
+    assert any(c["kind"] == "superseded-still-active" for c in result["conflicts"])
+
+
+def test_bundled_snapshot_is_consistent(knowledge_dir):
+    entries, _ = knowledge.load_packs(knowledge_dir)
+    assert knowledge.check_consistency(entries)["consistent"] is True
+
+
+# --------------------------------------------------------------------------- #
+# open_verified (Workstream B): the verify-gated assessor read path.
+# --------------------------------------------------------------------------- #
+def test_open_verified_trusts_in_package_snapshot(knowledge_dir):
+    entries, verification, consistency = knowledge.open_verified(knowledge_dir)
+    assert verification["trusted"] is True
+    assert consistency["consistent"] is True
+    assert all(not e.get("_untrusted") for e in entries)
+
+
+def test_open_verified_marks_unverified_root_untrusted(tmp_path):
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [_entry(id="KE-a")])
+    entries, verification, _ = knowledge.open_verified(root)
+    assert verification["trusted"] is False
+    assert all(e.get("_untrusted") for e in entries)
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 def test_cli_explain_returns_entry(tmp_path, capsys):
