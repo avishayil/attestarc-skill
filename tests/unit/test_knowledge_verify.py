@@ -423,6 +423,87 @@ def test_revocation_applies_and_rolls_back_current(tmp_path, monkeypatch):
     assert reloaded["current"]["version"] == 4  # rolled back to retained LKG
 
 
+# --------------------------------------------------------------------------- #
+# PR-E — per-artifact identity + high-water chain
+# --------------------------------------------------------------------------- #
+def test_anchor_identity_regexp_is_artifact_specific():
+    anchor = {"cert_identity_regexp_bundle": "BUNDLE_RE",
+              "cert_identity_regexp_revocation": "REVOKE_RE"}
+    assert kv._anchor_identity_regexp(anchor, "bundle") == "BUNDLE_RE"
+    assert kv._anchor_identity_regexp(anchor, "revocation") == "REVOKE_RE"
+    # A revocation attestation is NOT accepted under the bundle identity and vice
+    # versa: the two regexps differ, so a bundle signed off main (the revocation
+    # ref) cannot satisfy the bundle check.
+    assert (kv._anchor_identity_regexp(anchor, "bundle")
+            != kv._anchor_identity_regexp(anchor, "revocation"))
+    # Legacy fallback: an older anchor with only the combined key still verifies.
+    legacy = {"cert_identity_regexp": "LEGACY_RE"}
+    assert kv._anchor_identity_regexp(legacy, "bundle") == "LEGACY_RE"
+    assert kv._anchor_identity_regexp(legacy, "revocation") == "LEGACY_RE"
+    # No regexp at all → gh verify refuses (fail-secure) for this kind.
+    ok, detail = kv._gh_attest_verify("x", {"repo": "o/r"}, kind="bundle")
+    assert ok is False and "cert_identity_regexp" in detail
+
+
+def test_download_requires_prev_digest_when_prior_installed(tmp_path, monkeypatch):
+    # A prior version was installed (floor 5); a v6 manifest that OMITS prev_digest
+    # must be discarded (fail-closed) rather than skipping chain validation.
+    root, _ = _make_root(tmp_path, version=6, prev_digest=None)
+    monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
+    state = {"highest_version": 5, "highest_manifest_sha256": "d5",
+             "revoked_versions": [], "current": {"version": 5,
+             "manifest_sha256": "d5", "verified_via": "attestation"}}
+    result = kv.verify_download(root, anchor=_anchor(tmp_path), client_state=state)
+    assert result["action"] == "discard"
+    assert "prev_digest required" in result["reason"]
+
+
+def test_download_chains_to_high_water_not_active_current(tmp_path, monkeypatch):
+    # v4 -> v5 -> revoke(v5): `current` rolled back to v4 (d4) but the chain HEAD
+    # stays d5. v6 must chain to the head (d5), NOT to the active current (d4), so
+    # the client can move past a revoked release.
+    monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
+    state = {"highest_version": 5, "highest_manifest_sha256": "d5",
+             "revoked_versions": [5],
+             "current": {"version": 4, "manifest_sha256": "d4",
+                         "verified_via": "attestation"}}
+    good, _ = _make_root(tmp_path / "good", version=6, prev_digest="d5")
+    assert kv.verify_download(good, anchor=_anchor(tmp_path),
+                              client_state=state)["action"] == "install"
+    bad, _ = _make_root(tmp_path / "bad", version=6, prev_digest="d4")
+    res = kv.verify_download(bad, anchor=_anchor(tmp_path), client_state=state)
+    assert res["action"] == "discard" and "high-water" in res["reason"]
+
+
+def test_install_advances_chain_head(tmp_path, monkeypatch):
+    import tarfile
+    root, digest = _make_root(tmp_path, version=7)
+    archive = str(tmp_path / "bundle.tar.gz")
+    with tarfile.open(archive, "w:gz") as tf:
+        tf.add(root, arcname="bundle")
+    monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
+    anchor = _anchor(tmp_path)
+    anchor["snapshots_dir"] = str(tmp_path / "snaps")
+    result = kv.install(archive, anchor=anchor, client_state=kv._empty_state())
+    assert result["trusted"] is True and result["version"] == 7
+    reloaded = kv.load_client_state(anchor)
+    assert reloaded["highest_version"] == 7
+    assert reloaded["highest_manifest_sha256"] == digest  # chain head advanced
+
+
+def test_legacy_state_backfills_chain_head(tmp_path):
+    # State written before highest_manifest_sha256 existed: load backfills the head
+    # from `current` when the active snapshot is still the high-water version.
+    anchor = _anchor(tmp_path)
+    os.makedirs(anchor["client_state_dir"], exist_ok=True)
+    legacy = {"highest_version": 5, "revoked_versions": [],
+              "current": {"version": 5, "manifest_sha256": "d5"}, "history": []}
+    with open(kv.client_state_path(anchor), "w", encoding="utf-8") as fh:
+        json.dump(legacy, fh)
+    loaded = kv.load_client_state(anchor)
+    assert loaded["highest_manifest_sha256"] == "d5"
+
+
 def test_revocation_rolls_back_to_bootstrap_when_no_lkg(tmp_path, monkeypatch):
     monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
     rec = _write_revocation(tmp_path, [5])

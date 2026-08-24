@@ -139,8 +139,8 @@ def client_state_path(anchor: dict) -> str:
 
 
 def _empty_state() -> dict:
-    return {"highest_version": 0, "current": None,
-            "revoked_versions": [], "history": []}
+    return {"highest_version": 0, "highest_manifest_sha256": None,
+            "current": None, "revoked_versions": [], "history": []}
 
 
 def load_client_state(anchor: dict) -> dict:
@@ -172,9 +172,16 @@ def load_client_state(anchor: dict) -> dict:
         corrupt["_corrupt"] = True
         return corrupt
     data.setdefault("highest_version", 0)
+    data.setdefault("highest_manifest_sha256", None)
     data.setdefault("current", None)
     data.setdefault("revoked_versions", [])
     data.setdefault("history", [])
+    # Legacy backfill: state written before highest_manifest_sha256 existed. If the
+    # active snapshot is still the high-water version, its digest IS the chain head.
+    if data["highest_manifest_sha256"] is None and data["highest_version"]:
+        cur = data.get("current") or {}
+        if cur.get("version") == data["highest_version"] and cur.get("manifest_sha256"):
+            data["highest_manifest_sha256"] = cur["manifest_sha256"]
     return data
 
 
@@ -259,12 +266,26 @@ def _list_pack_files(root_real: str):
 # --------------------------------------------------------------------------- #
 # Attestation (gh) — network/tooling boundary; Updater only
 # --------------------------------------------------------------------------- #
-def _gh_attest_verify(artifact_path, anchor, offline_bundle=None):
-    """Verify a Sigstore build-provenance attestation over ``artifact_path`` with
-    the anchor's identity constraints. Returns (ok, detail).
+def _anchor_identity_regexp(anchor, kind):
+    """Return the artifact-SPECIFIC SAN identity regexp for ``kind`` (``"bundle"``
+    or ``"revocation"``). A knowledge bundle must be signed from a release tag
+    (refs/tags/knowledge-v<N>); a revocation must be signed from refs/heads/main.
+    Falls back to a legacy combined ``cert_identity_regexp`` if an older anchor
+    still carries one, so verification never silently loosens on upgrade."""
+    anchor = anchor or {}
+    key = ("cert_identity_regexp_revocation" if kind == "revocation"
+           else "cert_identity_regexp_bundle")
+    return anchor.get(key) or anchor.get("cert_identity_regexp")
 
-    Fail-secure: a missing ``gh`` or any non-zero exit is a verification FAILURE,
-    never a pass.
+
+def _gh_attest_verify(artifact_path, anchor, offline_bundle=None, kind="bundle"):
+    """Verify a Sigstore build-provenance attestation over ``artifact_path`` with
+    the anchor's ARTIFACT-SPECIFIC identity constraints. ``kind`` selects which
+    reviewed ref the certificate SAN must bind: ``"bundle"`` → the release tag ref,
+    ``"revocation"`` → refs/heads/main. Returns (ok, detail).
+
+    Fail-secure: a missing ``gh``, an anchor with no regexp for this kind, or any
+    non-zero exit is a verification FAILURE, never a pass.
     """
     if shutil.which("gh") is None:
         return False, "gh unavailable (cannot verify attestation)"
@@ -273,22 +294,17 @@ def _gh_attest_verify(artifact_path, anchor, offline_bundle=None):
         return False, "anchor missing repo"
     cmd = ["gh", "attestation", "verify", artifact_path, "--repo", repo]
     # gh treats [signer-workflow, cert-identity, cert-identity-regex, signer-repo]
-    # as a mutually-exclusive group. PREFER the SAN identity regexp: unlike
+    # as a mutually-exclusive group. We use the SAN identity regexp: unlike
     # --signer-workflow (which matches only the workflow PATH and ignores the git
-    # ref), the regexp binds the certificate SAN's trailing "@<ref>", so an
-    # attestation minted from an untrusted ref — a feature branch, an unreviewed
-    # workflow_dispatch — is rejected even though the workflow file is the same.
-    # The anchor's cert_identity_regexp is pinned to the reviewed refs (the
-    # release tag ref refs/tags/knowledge-v<N> and the dispatch ref
-    # refs/heads/main); see knowledge/trust-anchor.json. --signer-workflow is only
-    # a fallback for an anchor that pins no regexp. --cert-oidc-issuer is
-    # orthogonal and always applied.
-    signer_workflow = (anchor or {}).get("signer_workflow")
-    ident_re = (anchor or {}).get("cert_identity_regexp")
+    # ref), the regexp binds the certificate SAN's trailing "@<ref>". The regexp is
+    # ARTIFACT-SPECIFIC (see _anchor_identity_regexp): a bundle attested off main,
+    # or a revocation attested off a tag, fails here even though the workflow file
+    # is the same. --cert-oidc-issuer is orthogonal and always applied.
+    ident_re = _anchor_identity_regexp(anchor, kind)
     if ident_re:
         cmd += ["--cert-identity-regex", ident_re]
-    elif signer_workflow:
-        cmd += ["--signer-workflow", f"{repo}/{signer_workflow.lstrip('/')}"]
+    else:
+        return False, f"anchor missing cert_identity_regexp for kind={kind!r}"
     issuer = (anchor or {}).get("cert_oidc_issuer")
     if issuer:
         cmd += ["--cert-oidc-issuer", issuer]
@@ -445,16 +461,27 @@ def verify_download(bundle_dir, anchor=None, client_state=None, now=None,
     if not monotonic:
         return discard(f"rollback: version {version} <= highest trusted {floor}")
 
-    # 5. prev_digest chain (if a prior version was installed).
-    cur = client_state.get("current") or {}
+    # 5. prev_digest chain against the HIGH-WATER manifest (the chain head), not the
+    # active `current` — a revocation lowers `current` for assessment but must not
+    # break the update chain, or the client could never move past a revoked release.
+    # Once any prior version was installed (floor > 0), prev_digest is REQUIRED
+    # (fail-closed): silently omitting it must not skip chain validation.
+    head = client_state.get("highest_manifest_sha256")
+    if head is None:
+        # Legacy state (written before the chain head existed): if the active
+        # snapshot is still the high-water version, its digest IS the head.
+        cur = client_state.get("current") or {}
+        if cur.get("version") == floor and cur.get("manifest_sha256"):
+            head = cur["manifest_sha256"]
     prev = manifest.get("prev_digest")
-    if cur.get("manifest_sha256") and prev is not None:
-        chained = prev == cur.get("manifest_sha256")
-        report.check("chain", chained,
-                     "prev_digest chains to installed manifest"
-                     if chained else "prev_digest does not chain")
-        if not chained:
-            return discard("prev_digest does not chain to installed manifest")
+    if floor > 0:
+        if prev is None:
+            return discard("prev_digest required (a prior version was installed) "
+                           "but the manifest omits it")
+        if head is not None and prev != head:
+            report.check("chain", False, "prev_digest does not chain to high-water")
+            return discard("prev_digest does not chain to the high-water manifest")
+        report.check("chain", True, "prev_digest chains to high-water manifest")
 
     # 6. Revocation.
     if version in (client_state.get("revoked_versions") or []):
@@ -588,8 +615,13 @@ def install(bundle, anchor=None, client_state=None, now=None,
 
         # Advance client state atomically (single save of the fully-built state).
         new_state = dict(client_state)
-        new_state["highest_version"] = max(
-            int(client_state.get("highest_version") or 0), int(version))
+        prev_high = int(client_state.get("highest_version") or 0)
+        new_state["highest_version"] = max(prev_high, int(version))
+        # Advance the chain head only when this install is a NEW high-water version
+        # (verify_download already enforced version > floor, so this is always true
+        # on a normal install; guarded for safety). Revocation never touches it.
+        if int(version) >= prev_high:
+            new_state["highest_manifest_sha256"] = digest
         new_state["current"] = {"version": version, "manifest_sha256": digest,
                                 "verified_via": "attestation", "path": final}
         history = [h for h in (client_state.get("history") or [])
@@ -675,7 +707,8 @@ def verify_and_apply_revocation(revocation_path, anchor=None, client_state=None,
     except (OSError, json.JSONDecodeError) as exc:
         return discard(f"revocation unreadable: {exc}")
 
-    att_ok, att_detail = _gh_attest_verify(revocation_path, anchor, offline_bundle)
+    att_ok, att_detail = _gh_attest_verify(revocation_path, anchor, offline_bundle,
+                                           kind="revocation")
     report.check("attestation", att_ok, att_detail)
     if not att_ok:
         return discard(f"revocation attestation failed: {att_detail}")

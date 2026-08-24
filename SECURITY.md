@@ -97,8 +97,12 @@ turn the assessment path into a network-egress or exfiltration channel.
 The root of trust is an **external anchor** (`knowledge/trust-anchor.json`) that
 ships inside the SSH-signed skill release and lives *outside* any downloaded
 bundle. It pins the Sigstore build-provenance identity (repo + signer workflow +
-OIDC issuer) an official knowledge bundle must have been produced under, so **a
-bundle can never declare its own trust.** Verification shells out to the system
+the reviewed git **ref** + OIDC issuer) an official knowledge bundle must have been
+produced under, so **a bundle can never declare its own trust.** The SAN identity is
+**artifact-specific**: a bundle must be signed from `refs/tags/knowledge-v<N>`
+(`cert_identity_regexp_bundle`) and a revocation from `refs/heads/main`
+(`cert_identity_regexp_revocation`), so neither can impersonate the other and a bundle
+cannot be minted off `main`. Verification shells out to the system
 `gh attestation verify` (no Python crypto dependency). There are two entry points
 in `scripts/knowledge_verify.py`:
 
@@ -106,11 +110,12 @@ in `scripts/knowledge_verify.py`:
 verify_download  (Updater; network/gh)          verify_installed (Assessor; no network/gh)
   gh attestation verify <archive>+<manifest>      is the root the in-package snapshot?
     --repo / --cert-identity-regex / --issuer       → yes: bootstrap-trusted (integrity only)
-    (SAN binds workflow path AND git ref)         → no:  trusted ONLY if client state records
+    (SAN binds workflow path AND the bundle ref)  → no:  trusted ONLY if client state records
   → manifest pack hashes + no undeclared pack             this version+digest was attested
   → fresh (short TTL; freeze protection)          → pack hashes + no undeclared pack
   → version > client_state.highest_version        → not revoked
-  → prev_digest chains to installed LKG           → else untrusted
+  → prev_digest REQUIRED once installed, and       → else untrusted
+    chains to the high-water manifest head
   → not revoked
   ANY failure → DISCARD the download (keep LKG)
 ```
@@ -125,7 +130,12 @@ then atomically advances client state. Rollback memory (`~/.attestarc/state/`) a
 installed snapshots (`~/.attestarc/knowledge/snapshots/`) live in separate
 directories, and a *corrupt* (not merely absent) client-state file fails closed:
 the Updater refuses to advance and the assessor falls back to the in-package
-snapshot until an explicit reinit.
+snapshot until an explicit reinit. The `prev_digest` chain is checked against a
+**high-water manifest head** that only ever moves forward — a revocation can roll the
+active snapshot back to an older last-known-good but never lowers that head, so an
+in-order release after a revocation still chains and installs. Once anything is
+installed, a downloaded manifest that omits `prev_digest` or fails to chain to the
+head is discarded (fail-closed), never treated as a first install.
 
 This defends against knowledge tampering, rollback to vulnerable knowledge, a
 freeze on a stale version, a forged bundle, mix-and-match of files, and a
@@ -194,11 +204,14 @@ package.** The trust-critical surfaces, and example concerns for each, are:
   authority taken from a candidate's self-declaration rather than derived from the
   source registry.
 - **Release / attestation** (`.github/workflows/release-knowledge.yml`) — e.g. a
-  bundle published without provenance, an attestation minted from an unreviewed ref
-  (the workflow's ancestry gate refuses to sign a tag not contained in `main`, the
-  attest+publish job is confined to a `knowledge-release` environment restricted to
-  signed `knowledge-v*` tags, and the anchor binds the certificate's git ref, not just
-  the workflow path), or a rollback/freeze that a client accepts.
+  bundle published without provenance, an attestation minted from an unreviewed ref, or
+  an old reviewed commit retagged as a higher version (the bundle job runs only on a
+  `knowledge-v*` tag push and refuses to build unless the tagged commit **is the current
+  tip of `main`** — an exact-HEAD gate, not mere ancestry — while the revocation job runs
+  only on a `main` dispatch; the attest+publish job is confined to a `knowledge-release`
+  environment restricted to signed, immutable `knowledge-v*` tags, and the anchor binds
+  the certificate's git ref per artifact kind, not just the workflow path), or a
+  rollback/freeze that a client accepts.
 - **Helper scripts and installer** — e.g. a helper mishandling untrusted
   repository content, a secret value reaching `.attestarc/findings.json`, or the
   installer writing outside the intended skills directory.

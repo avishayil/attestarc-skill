@@ -174,10 +174,12 @@ ingestion" below). The shipped refresh is a narrow **download → verify → ins
    its Sigstore attestation with the host fetch tool.
 2. **Verify** it against the external `trust-anchor.json` — shells out to
    `gh attestation verify` for the pinned repo / workflow / git-ref / issuer identity
-   (the anchor's `cert_identity_regexp` binds the certificate's `@<ref>`, not just the
-   workflow path, so an attestation from an unreviewed ref is rejected), then checks
-   manifest pack integrity, freshness, monotonic version vs persistent client state
-   (`~/.attestarc/state/trusted-state.json`), `prev_digest` chaining, and
+   (the anchor binds the certificate's `@<ref>` per artifact kind, not just the workflow
+   path — a bundle must be signed from `refs/tags/knowledge-v<N>`, a revocation from
+   `refs/heads/main` — so an attestation from an unreviewed or wrong-kind ref is
+   rejected), then checks manifest pack integrity, freshness, monotonic version vs
+   persistent client state (`~/.attestarc/state/trusted-state.json`), `prev_digest`
+   chaining to the high-water manifest head (required once anything is installed), and
    revocation. **Any failure discards the download**; the installed last-known-good
    is retained and independently verified. `verify-download` is a pure fact check —
    it decides whether the bundle *should* be installed and mutates nothing:

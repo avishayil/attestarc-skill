@@ -14,14 +14,19 @@
 # with `gh attestation verify` before publishing — it never publishes something it
 # could not verify (fail-secure, never sign/publish-then-trust).
 #
-# Provenance is bound to REVIEWED source history three ways: (1) an ancestry gate
-# refuses to build unless the triggering commit is contained in origin/main (a tag
-# on an unreviewed commit cannot be signed); (2) the self-verify + client-side
-# checks bind the certificate SAN's git ref, not just the workflow path, to the
-# reviewed refs pinned in knowledge/trust-anchor.json; and (3) the release job runs
-# in the `knowledge-release` environment, whose deployment tag policy restricts it to
-# `knowledge-v*` tags. Release tags are immutable (tag-protection ruleset: no
-# force-push/deletion) and required to be signed (knowledge-v* tag ruleset).
+# Provenance is bound to the CURRENT reviewed head, and bundle vs revocation are
+# separated so neither can impersonate the other: (1) an exact-HEAD gate refuses to
+# build unless the tagged commit IS the current tip of origin/main — not merely an
+# ancestor — so an old reviewed commit cannot be retagged as a higher knowledge
+# version (rollback by relabeling); (2) a normal bundle is produced ONLY by a push of
+# a knowledge-v* tag and a revocation ONLY by a workflow_dispatch on main, and clients
+# verify each against an ARTIFACT-SPECIFIC SAN identity (bundle @refs/tags/knowledge-v<N>,
+# revocation @refs/heads/main) pinned in knowledge/trust-anchor.json; and (3) the
+# release job runs in the `knowledge-release` environment, whose deployment tag policy
+# restricts it to `knowledge-v*` tags. Release tags are immutable and required to be
+# signed (knowledge-v* tag ruleset: required_signatures + no force-push/deletion).
+# The prev_digest chain is fail-closed: if a prior release exists it MUST be listed,
+# downloaded, attestation-verified, and read, or the build refuses to publish.
 #
 # NOTE: actions/attest-build-provenance is pinned below to v4.2.2
 # (4d101475d8b20a2381f78447822ac1eab6504dd8). The maintainer MUST independently
@@ -53,7 +58,11 @@ concurrency:
 
 jobs:
   build-attest-publish:
-    if: ${{ github.event.inputs.revoke_version == '' }}
+    # A normal knowledge bundle is produced ONLY by a push of a knowledge-v* tag —
+    # never from a workflow_dispatch on a branch. This, plus the per-artifact
+    # identity in trust-anchor.json (bundles must be signed from refs/tags/knowledge-v*),
+    # stops a bundle being minted off main.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/knowledge-v') }}
     runs-on: ubuntu-latest
     # Protected release environment: its deployment tag policy restricts this job to
     # `knowledge-v*` tags, so the attest+publish path cannot run from an arbitrary ref
@@ -69,18 +78,23 @@ jobs:
           # contained in origin/main.
           fetch-depth: 0
 
-      - name: Bind to reviewed history (ancestry gate)
+      - name: Bind to current reviewed head (exact-HEAD gate)
         run: |
-          # Refuse to build/sign a tag that points at an unreviewed commit: the
-          # tagged commit MUST be contained in main's history (i.e. merged via
-          # review). A knowledge-v* tag on a feature branch or arbitrary commit
-          # fails here, before any attestation is minted.
+          # Refuse unless the tagged commit is the CURRENT tip of origin/main — not
+          # merely an ancestor. An ancestor gate would let a historically-reviewed
+          # but obsolete commit be retagged as a higher knowledge version (rollback
+          # by relabeling). Requiring the exact head means a knowledge-v* tag can
+          # only release the state main currently points at.
+          # Operational note: if main advances between tagging and this run, delete
+          # and recreate the tag on the new head (the knowledge-v* tag ruleset keeps
+          # tags immutable+signed; moving one needs the maintainer).
           git fetch --no-tags origin main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::commit $GITHUB_SHA is not contained in origin/main; refusing to sign an unreviewed release"
+          HEAD_SHA="$(git rev-parse refs/remotes/origin/main)"
+          if [ "$GITHUB_SHA" != "$HEAD_SHA" ]; then
+            echo "::error::tagged commit $GITHUB_SHA is not the current origin/main tip ($HEAD_SHA); refusing to sign a stale release"
             exit 1
           fi
-          echo "ancestry gate passed: $GITHUB_SHA is in origin/main"
+          echo "exact-HEAD gate passed: $GITHUB_SHA is the current origin/main tip"
 
       - name: Build manifest over the packs
         env:
@@ -104,25 +118,34 @@ jobs:
               return h.hexdigest()
 
           # prev_digest chains this manifest to the immediately-preceding release's
-          # manifest bytes (the sha256 the client records as `current`). It is a
-          # forward integrity chain; the primary anti-rollback remains the client's
-          # monotonic highest-version memory. null when no prior release exists.
+          # manifest bytes (the sha256 the client records as its high-water head). It
+          # is a forward integrity chain; the primary anti-rollback remains the
+          # client's monotonic highest-version memory. It is null ONLY when no prior
+          # knowledge-v* release exists. FAIL-CLOSED: if a prior release exists but we
+          # cannot list it, download it, authenticate its attestation, or read its
+          # manifest, we refuse to publish rather than emit a null (which a client
+          # would read as "first install" and skip chain validation).
+          def _die(msg):
+              raise SystemExit(f"prev_digest: {msg}; refusing to publish")
+
           def previous_manifest_digest(cur_version):
+              server = os.environ["GITHUB_SERVER_URL"]
+              repo = os.environ["GITHUB_REPOSITORY"]
+              issuer = "https://token.actions.githubusercontent.com"
               try:
                   out = subprocess.run(
                       ["gh", "release", "list", "--limit", "200",
                        "--json", "tagName", "-q", ".[].tagName"],
                       capture_output=True, text=True, check=True).stdout
               except (OSError, subprocess.SubprocessError) as exc:
-                  print(f"prev_digest: release list failed ({exc}); using null")
-                  return None
+                  _die(f"release list failed ({exc})")
               prior = []
               for line in out.splitlines():
                   m = re.match(r"^knowledge-v(\d+)$", line.strip())
                   if m and int(m.group(1)) < cur_version:
                       prior.append((int(m.group(1)), line.strip()))
               if not prior:
-                  print("prev_digest: no prior release; using null")
+                  print("prev_digest: no prior release; using null (first release)")
                   return None
               _, ptag = max(prior)
               with tempfile.TemporaryDirectory() as td:
@@ -130,18 +153,29 @@ jobs:
                       subprocess.run(["gh", "release", "download", ptag,
                                       "-p", "*.tar.gz", "-D", td], check=True)
                   except (OSError, subprocess.SubprocessError) as exc:
-                      print(f"prev_digest: download {ptag} failed ({exc}); using null")
-                      return None
+                      _die(f"download {ptag} failed ({exc})")
                   tars = glob.glob(os.path.join(td, "*.tar.gz"))
                   if not tars:
-                      return None
+                      _die(f"{ptag} has no .tar.gz asset")
+                  # Authenticate the prior archive BEFORE trusting its bytes: it must
+                  # carry a bundle attestation from that tag's ref. The chain head we
+                  # record must be an authenticated digest, not any bytes a mirror served.
+                  ident = (f"{server}/{repo}/.github/workflows/"
+                           f"release-knowledge.yml@refs/tags/{ptag}")
+                  try:
+                      subprocess.run(
+                          ["gh", "attestation", "verify", tars[0], "--repo", repo,
+                           "--cert-identity", ident, "--cert-oidc-issuer", issuer],
+                          check=True)
+                  except (OSError, subprocess.SubprocessError) as exc:
+                      _die(f"attestation verify of {ptag} archive failed ({exc})")
                   with tarfile.open(tars[0]) as tf:
                       member = next(
                           (m for m in tf.getmembers()
                            if m.name.endswith("knowledge/manifest.json")
                            or os.path.basename(m.name) == "manifest.json"), None)
                       if member is None:
-                          return None
+                          _die(f"{ptag} archive has no manifest.json")
                       data = tf.extractfile(member).read()
               digest = hashlib.sha256(data).hexdigest()
               print(f"prev_digest: chained to {ptag} manifest sha256={digest}")
@@ -206,7 +240,10 @@ jobs:
             --notes "Attested knowledge plane. Verify with 'gh attestation verify' against repo ${{ github.repository }}, workflow release-knowledge.yml, issuer https://token.actions.githubusercontent.com. Install with scripts/knowledge_verify.py verify-download."
 
   revoke:
-    if: ${{ github.event.inputs.revoke_version != '' }}
+    # A revocation (kill switch) is produced ONLY by a workflow_dispatch on main with
+    # a non-empty revoke_version — never by a tag push. Its attestation is verified
+    # by clients against cert_identity_regexp_revocation (@refs/heads/main).
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.event.inputs.revoke_version != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

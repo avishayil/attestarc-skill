@@ -990,24 +990,33 @@ The root of trust is an **external anchor** (`knowledge/trust-anchor.json`) that
 ships inside the SSH-signed skill release and lives OUTSIDE any downloaded bundle;
 it pins the Sigstore build-provenance identity (repo + signer workflow + the
 reviewed git **ref** + OIDC issuer) an official bundle must have been produced under.
-The identity is enforced by `cert_identity_regexp`, which binds the certificate SAN's
-trailing `@<ref>` — not only the workflow path — to the reviewed refs (the release
-tag `refs/tags/knowledge-v<N>` and the dispatch ref `refs/heads/main`), so an
-attestation minted from an unreviewed branch does not satisfy the anchor. A bundle
-can therefore never declare its own trust, and the in-package snapshot is
-bootstrap-trusted ONLY because it rode in on the attested skill release. Upstream CI
+The identity is enforced by an **artifact-specific** SAN regexp, which binds the
+certificate SAN's trailing `@<ref>` — not only the workflow path — to a *single*
+reviewed ref per artifact kind: a knowledge **bundle** must match
+`cert_identity_regexp_bundle` (`…@refs/tags/knowledge-v<N>` only) and a **revocation**
+must match `cert_identity_regexp_revocation` (`…@refs/heads/main` only), so neither can
+impersonate the other and an attestation minted from an unreviewed branch — or from the
+wrong ref for its kind — does not satisfy the anchor. (A legacy combined
+`cert_identity_regexp` is honored only as a fallback when the per-artifact keys are
+absent.) A bundle can therefore never declare its own trust, and the in-package snapshot
+is bootstrap-trusted ONLY because it rode in on the attested skill release. Upstream CI
 attests **both** `knowledge/manifest.json` (version, expiry, `prev_digest`, per-pack
-`{sha256,size}`) **and** the published `.tar.gz` with GitHub Artifact Attestations;
-it populates `prev_digest` from the immediately-preceding release's manifest and
-only signs a commit contained in `main`'s reviewed history (an ancestry gate). The
-attest+publish job runs in a protected `knowledge-release` environment whose
-deployment policy restricts it to `knowledge-v*` tags, and those tags must be signed
-and are immutable (`knowledge-v*` tag ruleset: `required_signatures` + no
-force-push/deletion).
+`{sha256,size}`) **and** the published `.tar.gz` with GitHub Artifact Attestations. A
+normal bundle is produced ONLY by a push of a `knowledge-v*` tag and only when the
+tagged commit **is the current tip of `origin/main`** (an **exact-HEAD** gate — not
+mere ancestry — so a historically-reviewed but obsolete commit cannot be retagged as a
+higher knowledge version); a revocation is produced ONLY by a `workflow_dispatch` on
+`main` (ancestry gate). The builder populates `prev_digest` **fail-closed**: if a prior
+release exists it MUST list, download, attestation-verify, and read that release's
+manifest, or refuse to publish; `null` is emitted only when no prior release exists. The
+attest+publish job runs in a protected `knowledge-release` environment whose deployment
+policy restricts it to `knowledge-v*` tags, and those tags must be signed and are
+immutable (`knowledge-v*` tag ruleset: `required_signatures` + no force-push/deletion).
 `scripts/knowledge_verify.py` provides the verification and lifecycle entry points:
 `verify_download` (Updater; runs `gh attestation verify` against the anchor identity,
 then checks manifest pack integrity, freshness/anti-freeze, monotonic version vs
-persistent client state, `prev_digest` chaining, and revocation — **any failure
+persistent client state, `prev_digest` chaining against the **high-water manifest
+head** — REQUIRED once anything is installed — and revocation — **any failure
 discards the download and retains the installed last-known-good**) and `verify_installed` (Assessor; no
 network or `gh`, trusts the in-package snapshot as bootstrap or a refreshed snapshot
 only if client state records its exact version+digest was attested). A downloaded
@@ -1026,7 +1035,10 @@ its own IO rather than `tarfile.extractall`); run `verify_download`; on success 
 manifest and declared packs into a staging snapshot, re-verify the staged bytes
 against the attested manifest, atomically rename it into
 `~/.attestarc/knowledge/snapshots/vN`, and atomically advance client state
-(`highest_version`, `current`, `history`). Client state
+(`highest_version`, `current`, `history`, and — whenever `version` reaches a new high —
+`highest_manifest_sha256`, the forward-only chain head the next release's `prev_digest`
+must match). State written before that field existed SHALL be backfilled from `current`
+when it is the highest version. Client state
 (`~/.attestarc/state/trusted-state.json`) and installed snapshots
 (`~/.attestarc/knowledge/snapshots/`) SHALL live in separate directories.
 `load_client_state` SHALL distinguish an **absent** state file (fresh machine; empty
@@ -1042,8 +1054,10 @@ unreadable, or malformed record is discarded and client state left untouched),
 structurally validates its `revoked_versions` (a non-empty list of positive
 integers — the shape the release workflow emits), records the revoked version(s), and rolls `current` back to the most recent retained
 non-revoked snapshot still on disk (or to the in-package bootstrap when none
-remains), marking findings assessed under it `requires_reverification`. The internal
-`_apply_revocation` (which trusts its caller) SHALL have no public entry point.
+remains), marking findings assessed under it `requires_reverification`. It SHALL NOT
+lower `highest_version` or `highest_manifest_sha256`, so the forward chain head is
+preserved and an in-order release after a revocation still chains and installs. The
+internal `_apply_revocation` (which trusts its caller) SHALL have no public entry point.
 
 A matching attested pack hash establishes byte integrity but NOT policy
 conformance. Before a snapshot is trusted for reasoning it SHALL additionally pass

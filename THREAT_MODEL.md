@@ -121,13 +121,18 @@ The root of trust is an **external anchor** that ships inside the SSH-signed ski
 release — `knowledge/trust-anchor.json` — and lives OUTSIDE any downloaded bundle.
 It pins the Sigstore build-provenance identity (repo + signer workflow + the
 reviewed git **ref** + OIDC issuer) that an official knowledge bundle must have been
-produced under. The identity is enforced by `cert_identity_regexp`, which binds the
-certificate SAN's trailing `@<ref>` — not merely the workflow path — to the reviewed
-refs only (the release tag `refs/tags/knowledge-v<N>` and the dispatch ref
-`refs/heads/main`), so an attestation minted from an unreviewed branch does not
-satisfy the anchor even though the workflow file is identical. A bundle can
-therefore never declare its own trust; the homemade root/timestamp/snapshot/
-targets role-file protocol is gone.
+produced under. The identity is enforced by an **artifact-specific** SAN regexp,
+which binds the certificate SAN's trailing `@<ref>` — not merely the workflow path —
+to a *single* reviewed ref per artifact kind: a knowledge **bundle** (manifest/archive)
+must match `cert_identity_regexp_bundle` (`…release-knowledge.yml@refs/tags/knowledge-v<N>`
+only), and a **revocation** must match `cert_identity_regexp_revocation`
+(`…@refs/heads/main` only). Splitting these prevents a bundle from being signed off
+`main` and prevents a revocation identity from standing in for a bundle; an attestation
+minted from an unreviewed branch, or from the wrong ref for its kind, does not satisfy
+the anchor even though the workflow file is identical. A bundle can therefore never
+declare its own trust; the homemade root/timestamp/snapshot/targets role-file protocol
+is gone. (A legacy combined `cert_identity_regexp` is honored only as a fallback when
+the per-artifact keys are absent.)
 
 Two verification entry points in `knowledge_verify.py`:
 
@@ -135,11 +140,12 @@ Two verification entry points in `knowledge_verify.py`:
 verify_download  (Updater; network/gh)          verify_installed (Assessor; no network/gh)
   gh attestation verify <archive>+<manifest>      is the root the in-package snapshot?
     --repo / --cert-identity-regex / --issuer       → yes: bootstrap-trusted (integrity only)
-    (SAN binds workflow path AND git ref)         → no:  trusted ONLY if client state records
+    (SAN binds workflow path AND the bundle ref)  → no:  trusted ONLY if client state records
   → manifest pack hashes + no undeclared pack             this version+digest was attested
   → fresh (short TTL; freeze protection)          → pack hashes + no undeclared pack
   → version > client_state.highest_version        → not revoked
-  → prev_digest chains to installed LKG           → else untrusted
+  → prev_digest REQUIRED once installed, and       → else untrusted
+    chains to the high-water manifest head
   → not revoked
   ANY failure → DISCARD the download (keep LKG)
 ```
@@ -178,7 +184,18 @@ installed is closed). `install`:
    re-verify the *staged* bytes against the (attested) manifest, then `os.replace`
    into `snapshots/vN` — the install is atomic.
 4. Advance client state in a single atomic write: `highest_version`, `current`
-   (`{version, manifest_sha256, verified_via, path}`), and `history`.
+   (`{version, manifest_sha256, verified_via, path}`), `history`, and — whenever
+   `version` reaches a new high — `highest_manifest_sha256`, the **high-water chain
+   head** the next release's `prev_digest` must match.
+
+The `prev_digest` chain is checked against that **high-water head, not the active
+`current` snapshot**. A revocation may roll `current` back to an older last-known-good,
+but it never lowers `highest_version` or the chain head, so `v4 → v5 → revoke(v5) → v6`
+still installs (v6 chains to the v5 head). Once anything is installed (floor > 0) a
+downloaded manifest **must** carry a `prev_digest` equal to the head — a missing chain
+link is fail-closed (`discard`), not silently treated as a first install. Only a genuine
+first install (floor 0) may omit it. (Client state written before this field existed is
+backfilled from `current` when it is the highest version.)
 
 Client state and snapshot material live in **separate directories** —
 `~/.attestarc/state/` (rollback memory) and `~/.attestarc/knowledge/snapshots/`
@@ -191,21 +208,32 @@ the Assessor falls back to the in-package bootstrap.
 
 **Release provenance (producer side).** The one workflow that can mint a trusted
 attestation, `.github/workflows/release-knowledge.yml`, is itself root-of-trust and
-constrains what it will sign: (1) an **ancestry gate** (`git merge-base
---is-ancestor "$GITHUB_SHA" origin/main`) refuses to build unless the triggering
-commit is contained in `main`'s reviewed history, so a `knowledge-v*` tag on an
-unreviewed commit — or a revocation dispatched from an unreviewed branch — never
-reaches the attest step; (2) **both** the `manifest.json` **and** the published
-`.tar.gz` are attested and self-verified (`gh attestation verify` against the exact
-triggering ref) *before* publishing — fail-secure, never publish-then-trust;
-(3) the builder populates `prev_digest` by fetching the immediately-preceding
-release's manifest and recording its sha256, so the forward chain the client checks
-is real rather than always-null; (4) the kill switch emits `revoked_versions: [N]`
-(a non-empty list of positive ints — the shape the client validates), attested
-exactly like a bundle; and (5) the third-party attestation action is pinned to a
-full commit SHA, set/verified in the two-party review that gates this file. These
-are producer-side constraints; the client still independently verifies every
-downloaded artifact against the anchor.
+constrains what it will sign: (1) **strictly separated triggers** — a normal bundle
+is produced ONLY by a push of a `knowledge-v*` tag (`build-attest-publish`), and a
+revocation ONLY by a `workflow_dispatch` on `main` (`revoke`); neither job can run on
+the other's trigger, and the two are attested under distinct SAN identities so neither
+can impersonate the other; (2) an **exact-HEAD gate** for a bundle — the build refuses
+unless the tagged commit **is the current tip of `origin/main`**, not merely an
+ancestor, so a historically-reviewed but obsolete commit cannot be retagged as a higher
+knowledge version (rollback by relabeling); the revocation job keeps an ancestry gate
+since it is dispatched from a branch; (3) **both** the `manifest.json` **and** the
+published `.tar.gz` are attested and self-verified (`gh attestation verify` against the
+exact triggering ref) *before* publishing — fail-secure, never publish-then-trust;
+(4) the builder populates `prev_digest` **fail-closed** — if a prior `knowledge-v*`
+release exists it MUST be listed, downloaded, its archive attestation authenticated
+(bundle identity), and its manifest read, or the build refuses to publish; a `null`
+is emitted only when no prior release exists, so the client never receives a spurious
+"first install" that skips chain validation; (5) the kill switch emits
+`revoked_versions: [N]` (a non-empty list of positive ints — the shape the client
+validates), attested exactly like a bundle; and (6) the third-party attestation action
+is pinned to a full commit SHA, set/verified in the two-party review that gates this
+file. The attest+publish job additionally runs only in the protected `knowledge-release`
+environment, whose deployment tag policy restricts it to `knowledge-v*` tags; those tags
+are immutable and required to be signed. (Environment REQUIRED-REVIEWER approval is not
+set: a single-maintainer repo cannot self-approve, so the exact-HEAD gate, ref-bound
+identity, and signed-immutable tags are the enforceable controls.) These are
+producer-side constraints; the client still independently verifies every downloaded
+artifact against the anchor.
 
 ## 5. Fail-secure runtime policy
 
@@ -215,6 +243,8 @@ The runtime NEVER fetches-then-trusts. On any anomaly it degrades safely:
 |-----------|----------|
 | Attestation absent / identity mismatch (download) | **Discard** the download; keep the installed last-known-good |
 | Manifest/pack tampered, rolled back, or frozen (expired) | **Discard** the download; keep the installed last-known-good |
+| Downloaded manifest omits `prev_digest`, or it does not chain to the high-water head, once anything is installed (floor > 0) | **Discard** — a missing/broken chain link is fail-closed, never read as a first install |
+| Revocation rolled `current` back to an older LKG | The high-water chain head is preserved (revocation never lowers `highest_version`), so the next in-order release still chains and installs |
 | Downloaded bundle presents `mode: bootstrap` | **Reject** — bootstrap is valid ONLY for the in-package snapshot |
 | Downloaded archive contains an unsafe member (absolute path, `..`, symlink/hardlink/device) | **Refuse** the whole extract before writing anything; nothing is installed |
 | Client state present but corrupt/unparseable (rollback memory lost) | Mark `_corrupt` and **refuse** to advance state (`install`/revocation); Assessor falls back to the in-package bootstrap until explicit reinit |

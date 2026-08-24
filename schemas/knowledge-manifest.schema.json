@@ -17,12 +17,15 @@
         "spec_version": {"type": "string"},
         "comment": {"type": "string"},
         "repo": {"type": "string", "description": "owner/repo that must have produced the attestation"},
-        "signer_workflow": {"type": "string", "description": "workflow path that must have signed (gh attestation verify --signer-workflow)"},
-        "signer_workflow_ref": {"type": "string"},
-        "cert_identity_regexp": {"type": "string", "description": "SAN identity regexp the signing certificate must match"},
+        "signer_workflow": {"type": "string", "description": "workflow path that must have signed (informational; the SAN check uses the per-artifact regexps below)"},
+        "signer_workflow_refs": {"type": "object", "description": "informational map of artifact kind -> reviewed git ref (e.g. {\"bundle\": \"refs/tags/knowledge-v<N>\", \"revocation\": \"refs/heads/main\"})"},
+        "cert_identity_regexp_bundle": {"type": "string", "description": "SAN identity regexp a knowledge BUNDLE (manifest/archive) attestation must match; binds the trailing @refs/tags/knowledge-v<N>"},
+        "cert_identity_regexp_revocation": {"type": "string", "description": "SAN identity regexp a REVOCATION attestation must match; binds the trailing @refs/heads/main"},
+        "cert_identity_regexp": {"type": "string", "description": "DEPRECATED legacy combined regexp; used only as a fallback when the per-artifact keys are absent"},
         "cert_oidc_issuer": {"type": "string", "description": "expected OIDC issuer (Sigstore Fulcio), e.g. https://token.actions.githubusercontent.com"},
         "bootstrap_manifest": {"type": "string", "description": "path (relative to the package knowledge root) of the in-package bootstrap manifest"},
-        "client_state_dir": {"type": "string", "description": "directory holding the persistent trusted-state.json (outside any repo)"}
+        "client_state_dir": {"type": "string", "description": "directory holding the persistent trusted-state.json (outside any repo)"},
+        "snapshots_dir": {"type": "string", "description": "directory holding installed refreshed snapshots (separate from client state)"}
       }
     },
     "pack": {
