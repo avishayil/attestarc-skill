@@ -1,0 +1,108 @@
+# Skill-package release + attestation (root-of-trust workflow).
+#
+# Packages the SHIPPED skill payload (SKILL.md, core/, references/, knowledge/,
+# scripts/, schemas/, LICENSE, README.md — the same set install.py ships; dev
+# scaffolding is excluded) into attestarc-skill-<tag>.tar.gz, attests it with
+# GitHub Artifact Attestations (Sigstore build provenance, OIDC), self-verifies,
+# and publishes it as a release asset. This gives the DISTRIBUTED PACKAGE a
+# cryptographic identity that `install.py --from-tarball` verifies against
+# bootstrap-anchor.json before extracting/installing — because a plain
+# `git clone --branch <tag>` does NOT verify the tag's SSH signature.
+#
+# This is the package analogue of release-knowledge.yml (which anchors knowledge
+# bundles). It is itself ROOT-OF-TRUST: any change is two-party review, and the
+# third-party action is pinned to a full commit SHA (verified independently in that
+# review). Triggered ONLY by a push of a semver v* tag (never knowledge-v*), and an
+# exact-HEAD gate refuses to sign unless the tagged commit is the current tip of
+# origin/main — an old reviewed commit cannot be retagged as a higher package
+# version. The identity is bound to refs/tags/v<major>.<minor>.<patch> so the
+# installer's cert-identity regexp (bootstrap-anchor.json) matches only a real
+# release tag.
+#
+# NOTE: actions/attest-build-provenance is pinned to v4.2.2
+# (4d101475d8b20a2381f78447822ac1eab6504dd8) — the same SHA release-knowledge.yml
+# pins. The maintainer MUST independently verify this SHA in the two-party review
+# that gates changes to this file before enabling the workflow.
+
+name: release-skill
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-skill-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-attest-publish:
+    # A package tarball is produced ONLY by a push of a semver v* tag. knowledge-v*
+    # tags do not match this pattern, so this never collides with release-knowledge.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Bind to current reviewed head (exact-HEAD gate)
+        run: |
+          # Refuse unless the tagged commit is the CURRENT tip of origin/main — not
+          # merely an ancestor — so a historically-reviewed but obsolete commit
+          # cannot be retagged as a higher package version (rollback by relabeling).
+          # Operational note: if main advances between tagging and this run, delete
+          # and recreate the tag on the new head.
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          HEAD_SHA="$(git rev-parse refs/remotes/origin/main)"
+          if [ "$GITHUB_SHA" != "$HEAD_SHA" ]; then
+            echo "::error::tagged commit $GITHUB_SHA is not the current origin/main tip ($HEAD_SHA); refusing to sign a stale package release"
+            exit 1
+          fi
+          echo "exact-HEAD gate passed: $GITHUB_SHA is the current origin/main tip"
+
+      - name: Package the shipped skill payload
+        run: |
+          # Ship exactly install.py's SKILL_PAYLOAD; exclude dev scaffolding
+          # (tests/, evals/, evolution/, install.py, pyproject, THREAT_MODEL.md, ...)
+          # and Python caches. bootstrap-anchor.json is deliberately NOT included:
+          # the anchor must live outside the artifact it verifies.
+          tar --exclude='__pycache__' --exclude='*.pyc' \
+            -czf "attestarc-skill-${{ github.ref_name }}.tar.gz" \
+            SKILL.md core references knowledge scripts schemas LICENSE README.md
+
+      - name: Attest the package (Sigstore build provenance)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: attestarc-skill-${{ github.ref_name }}.tar.gz
+
+      - name: Self-verify provenance before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Fail-secure: never publish a tarball whose own attestation does not
+          # verify under this repo's identity AND the exact triggering tag ref —
+          # the same identity install.py --from-tarball enforces via bootstrap-anchor.json.
+          IDENTITY="${{ github.server_url }}/${{ github.repository }}/.github/workflows/release-skill.yml@${{ github.ref }}"
+          gh attestation verify "attestarc-skill-${{ github.ref_name }}.tar.gz" \
+            --repo "${{ github.repository }}" \
+            --cert-identity "$IDENTITY" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+
+      - name: Publish skill release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Upload the attested tarball to the release for this tag (create the
+          # release if the tag was pushed without one).
+          gh release create "${{ github.ref_name }}" \
+            "attestarc-skill-${{ github.ref_name }}.tar.gz" \
+            --title "AttestArc ${{ github.ref_name }}" \
+            --notes "Attested skill package. Verify + install with 'python install.py --from-tarball attestarc-skill-${{ github.ref_name }}.tar.gz' (runs 'gh attestation verify' against bootstrap-anchor.json first), or verify manually with 'gh attestation verify' against repo ${{ github.repository }}, workflow release-skill.yml, issuer https://token.actions.githubusercontent.com." \
+            || gh release upload "${{ github.ref_name }}" \
+                 "attestarc-skill-${{ github.ref_name }}.tar.gz" --clobber

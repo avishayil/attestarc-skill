@@ -94,9 +94,11 @@ turn the assessment path into a network-egress or exfiltration channel.
 
 ### Attestation-anchored updates
 
-The root of trust is an **external anchor** (`knowledge/trust-anchor.json`) that
-ships inside the SSH-signed skill release and lives *outside* any downloaded
-bundle. It pins the Sigstore build-provenance identity (repo + signer workflow +
+The root of trust for *knowledge bundles* is an **external anchor**
+(`knowledge/trust-anchor.json`) that ships inside the skill package and lives
+*outside* any downloaded bundle. (The *package itself* is authenticated at install
+time by a separate anchor — see "Installing the package" below.) It pins the
+Sigstore build-provenance identity (repo + signer workflow +
 the reviewed git **ref** + OIDC issuer) an official knowledge bundle must have been
 produced under, so **a bundle can never declare its own trust.** The SAN identity is
 **artifact-specific**: a bundle must be signed from `refs/tags/knowledge-v<N>`
@@ -147,6 +149,27 @@ never a value inside the bundle. A compromised version can be revoked via an
 public path attestation-verifies the revocation record against the anchor, rolls
 the active snapshot back to the last retained non-revoked one, and re-observes
 affected findings rather than silently resolving them.
+
+### Installing the package
+
+The attestation story above covers *knowledge bundles*. The **skill package**
+itself has a separate root of trust, `bootstrap-anchor.json`, which lives at the
+repo root *outside* the shipped payload. Be precise about what install-time
+verification you get:
+
+- **A `git clone` of a signed release tag does NOT verify the tag's SSH
+  signature.** Git checks out the ref; it does not validate any signature unless
+  you explicitly run `git verify-tag`. Installing from a clone is fully supported
+  (and still runs the in-package knowledge integrity + trust-contract gate), but it
+  makes **no** cryptographic claim about who produced the package.
+- **The cryptographic install-time check is `python install.py --from-tarball
+  <path>`.** It runs `gh attestation verify` on the release tarball against
+  `bootstrap-anchor.json` (repo + OIDC issuer + the
+  `release-skill.yml@refs/tags/v<semver>` identity) **before extracting anything**,
+  then safe-extracts and installs only the verified contents. The tarball is
+  produced and attested by `.github/workflows/release-skill.yml` under an
+  exact-HEAD gate. Fail-secure: a missing `gh`, a verify failure, or a missing
+  anchor aborts the install with nothing extracted.
 
 ### Core invariants
 
@@ -215,15 +238,18 @@ package.** The trust-critical surfaces, and example concerns for each, are:
   satisfying auto-promote; knowledge promoted without a valid, identity-matched
   attestation; a forged bundle or revocation being trusted; authority taken from a
   candidate's self-declaration rather than derived from the source registry.
-- **Release / attestation** (`.github/workflows/release-knowledge.yml`) — e.g. a
+- **Release / attestation** (`.github/workflows/release-knowledge.yml`,
+  `.github/workflows/release-skill.yml`, `bootstrap-anchor.json`) — e.g. a
   bundle published without provenance, an attestation minted from an unreviewed ref, or
   an old reviewed commit retagged as a higher version (the bundle job runs only on a
   `knowledge-v*` tag push and refuses to build unless the tagged commit **is the current
   tip of `main`** — an exact-HEAD gate, not mere ancestry — while the revocation job runs
   only on a `main` dispatch; the attest+publish job is confined to a `knowledge-release`
   environment restricted to signed, immutable `knowledge-v*` tags, and the anchor binds
-  the certificate's git ref per artifact kind, not just the workflow path), or a
-  rollback/freeze that a client accepts.
+  the certificate's git ref per artifact kind, not just the workflow path), a rollback/
+  freeze that a client accepts, or a **package tarball** installed without verifying its
+  provenance against `bootstrap-anchor.json` (the skill-release job attests the tarball
+  under the same exact-HEAD gate; `install.py --from-tarball` verifies before extracting).
 - **Helper scripts and installer** — e.g. a helper mishandling untrusted
   repository content, a secret value reaching `.attestarc/findings.json`, or the
   installer writing outside the intended skills directory.

@@ -73,8 +73,9 @@ Attested, versioned, temporal, provenance-backed knowledge packs (`knowledge/`).
 
 - MAY be refreshed by the Updater principal (§3), never by the Assessor.
 - Trusted for reasoning ONLY after passing the verification chain (§4): the
-  in-package snapshot is bootstrap-trusted (it rode in on the signed skill
-  release); a refreshed snapshot is trusted only if persistent client state records
+  in-package snapshot is bootstrap-trusted (it rode in with the skill package,
+  whose own authenticity is established at install time by §4a, not by this
+  anchor); a refreshed snapshot is trusted only if persistent client state records
   that its exact version + manifest digest was attestation-verified.
 - Every entry MUST carry provenance (a registry-derived source, bound to a fetched
   object), and the pack set is only trusted after `check_consistency` **and**
@@ -117,8 +118,11 @@ channel.
 
 ## 4. Update security (attestation-based)
 
-The root of trust is an **external anchor** that ships inside the SSH-signed skill
-release — `knowledge/trust-anchor.json` — and lives OUTSIDE any downloaded bundle.
+The root of trust for *knowledge bundles* is an **external anchor** that ships
+inside the skill package — `knowledge/trust-anchor.json` — and lives OUTSIDE any
+downloaded bundle. (The *package itself* has a separate root of trust,
+`bootstrap-anchor.json`; how the distributed package is authenticated at install
+time is covered in §4a.)
 It pins the Sigstore build-provenance identity (repo + signer workflow + the
 reviewed git **ref** + OIDC issuer) that an official knowledge bundle must have been
 produced under. The identity is enforced by an **artifact-specific** SAN regexp,
@@ -235,6 +239,41 @@ identity, and signed-immutable tags are the enforceable controls.) These are
 producer-side constraints; the client still independently verifies every downloaded
 artifact against the anchor.
 
+## 4a. Distribution security (the package itself)
+
+§4 authenticates *knowledge bundles*. The **skill package** — the code, kernel,
+schemas, and the bootstrap knowledge snapshot — needs its own install-time
+integrity story, because the package is what establishes every subsequent trust
+decision (it carries `knowledge/trust-anchor.json`, the kernel, and the promotion
+policy). Honest statement of the property:
+
+- **A plain `git clone --branch <tag>` does NOT verify the tag's SSH signature.**
+  Git checks out the named ref without validating any signature unless the caller
+  explicitly runs `git verify-tag`/`git tag -v` with the maintainer's public key.
+  So cloning a "signed release tag" gives you the bytes at that ref, not a
+  cryptographic guarantee of who produced them. Documentation MUST NOT imply the
+  installer verifies the signed release when installing from a clone.
+- **The cryptographic install-time check is the attested-tarball path.**
+  `.github/workflows/release-skill.yml` (root-of-trust) packages exactly the
+  shipped `SKILL_PAYLOAD` into `attestarc-skill-<tag>.tar.gz`, attests it with
+  GitHub Artifact Attestations (Sigstore build provenance, OIDC) under the
+  identity `release-skill.yml@refs/tags/v<semver>`, self-verifies, and publishes
+  it. An **exact-HEAD gate** (identical to the knowledge release job) refuses to
+  sign unless the tagged commit is the current tip of `origin/main`, so a stale
+  reviewed commit cannot be relabeled as a higher package version.
+- **`install.py --from-tarball <path>`** loads the external `bootstrap-anchor.json`
+  (which lives at the repo root *outside* `SKILL_PAYLOAD` — a bundle can never
+  declare its own trust), runs `gh attestation verify` against the anchor's repo +
+  OIDC issuer + `cert_identity_regexp` **before extracting anything**, and only
+  then safe-extracts (member-by-member via `_pathsafe.safe_extract_tar`) and
+  installs from the verified contents. Fail-secure: a missing `gh`, a verify
+  failure, or a missing anchor aborts the install; nothing is extracted first.
+- A source-checkout install (`python install.py` from a clone) remains supported
+  for development and for users who verify the tag signature out of band; it still
+  runs the in-package knowledge integrity + trust-contract gate
+  (`verify_bundled_knowledge`), but it makes **no** claim to have cryptographically
+  authenticated the package. Users who want that guarantee install `--from-tarball`.
+
 ## 5. Fail-secure runtime policy
 
 The runtime NEVER fetches-then-trusts. On any anomaly it degrades safely:
@@ -298,7 +337,9 @@ semantic diff → direction → may-promote).
   candidate schema), `schemas/learning-candidate.schema.json`,
   `schemas/eval-result.schema.json`, anything under `knowledge/promotions/` (the
   per-entry promotion decisions and the bootstrap approval),
-  `.github/workflows/release-knowledge.yml`, or **any weakening/deletion of a
+  `bootstrap-anchor.json` (the package-distribution root of trust),
+  `.github/workflows/release-knowledge.yml`, `.github/workflows/release-skill.yml`
+  (attests the distributed package tarball), or **any weakening/deletion of a
   trusted eval**.
 - **Never auto-promote** — blog / issue / researcher post / model inference →
   candidate only.
@@ -399,14 +440,27 @@ dependents surface `requires_reverification` and the condition is re-observed.
 Terms coined in this document and reused across `SECURITY.md`, `SPECIFICATION.md`,
 and the security page.
 
-- **Trust anchor** — the external root of trust (`knowledge/trust-anchor.json`)
-  that ships inside the SSH-signed skill release and lives outside any downloaded
-  bundle. It pins the Sigstore build-provenance identity (repo + signer workflow +
-  OIDC issuer) an official bundle must have been produced under. Two-party review
-  to change.
+- **Trust anchor** — the external root of trust for *knowledge bundles*
+  (`knowledge/trust-anchor.json`) that ships inside the skill package and lives
+  outside any downloaded bundle. It pins the Sigstore build-provenance identity
+  (repo + signer workflow + OIDC issuer) an official bundle must have been produced
+  under. Two-party review to change.
+- **Bootstrap anchor** — the external root of trust for the *skill package
+  distribution* (`bootstrap-anchor.json`), distinct from the knowledge trust
+  anchor. It lives at the repo root *outside* the shipped payload (not in
+  `SKILL_PAYLOAD`) and pins the Sigstore build-provenance identity
+  (repo + `release-skill.yml@refs/tags/v<semver>` + OIDC issuer) an official
+  package tarball must carry. `install.py --from-tarball` runs `gh attestation
+  verify` against it *before extracting anything*. This is the cryptographic
+  install-time check on the package itself; a plain `git clone --branch <tag>`
+  does **not** verify the tag's SSH signature, so it establishes no package
+  authenticity. Two-party review to change.
 - **Bootstrap-trusted** — the trust status of the *in-package* knowledge snapshot:
-  it is trusted for integrity (its packs match the manifest) *because it rode in on
-  the attested skill release*, not because it declares itself trusted. A
+  it is trusted for integrity (its packs match the manifest) *because it rode in
+  with the skill package*, not because it declares itself trusted. The package's
+  own authenticity is established at install time only when installed via the
+  attested-tarball path (`--from-tarball`, verified against the bootstrap anchor);
+  a plain git clone of a signed tag does not verify the tag signature. A
   *downloaded* bundle presenting `mode: bootstrap` is always rejected.
 - **Verified-LKG (last-known-good)** — a refreshed snapshot that is trusted only
   because persistent client state records that its exact version + manifest digest
@@ -453,7 +507,7 @@ and the security page.
   `promote_to_verified` the only path to a shipped active entry.
 - **Bootstrap approval** (`knowledge/promotions/bootstrap.approval.json`) — the
   digest-pinned, two-party approval recorded once for the hand-authored entries that
-  rode in on the signed skill release and predate the promotion pipeline (so carry no
+  rode in with the skill package and predate the promotion pipeline (so carry no
   quarantine receipts); one canonical digest per entry id.
 - **`requires_reverification`** — a read-time view surfaced on a finding whose
   knowledge dependency was superseded or revoked. The stored status is never

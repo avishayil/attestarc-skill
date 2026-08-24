@@ -75,9 +75,9 @@ normative rationale.
 ### Claude Code (recommended)
 
 AttestArc is a native Claude Agent Skill: Claude Code automatically discovers
-skills under `.claude/skills/`. The simplest install is a clone of a signed
-release tag (releases are published as signed, protected git tags, so a pinned
-tag can't be moved out from under you):
+skills under `.claude/skills/`. The simplest install is a clone of a release tag
+(release tags are protected and immutable, so a pinned tag can't be moved out
+from under you):
 
 ```bash
 # Global — available in every repository you open
@@ -89,6 +89,13 @@ git clone --branch v0.5.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc
 ```
 
+> **What a clone does and doesn't guarantee.** A `git clone --branch <tag>` checks
+> out the bytes at that tag; it does **not** verify the tag's signature unless you
+> run `git verify-tag <tag>` yourself with the maintainer's key. If you want a
+> cryptographic guarantee of *who produced the package*, install from the attested
+> release tarball (below) — that path runs `gh attestation verify` against the
+> package's Sigstore build provenance before extracting anything.
+
 Prefer to copy only the skill payload (leaving development files behind)? Use the
 installer:
 
@@ -99,6 +106,20 @@ cd attestarc-skill
 python install.py                                  # current project → .claude/skills/attestarc/
 python install.py --scope user                     # global → ~/.claude/skills/attestarc/
 python install.py --scope project --target /path/to/project
+```
+
+**Verified install (recommended for supply-chain assurance).** Download the
+attested release tarball from the GitHub release and install it via
+`--from-tarball`. The installer runs `gh attestation verify` against
+`bootstrap-anchor.json` (the package's external root of trust) **before**
+extracting anything, and refuses to install if verification fails or `gh` is
+absent:
+
+```bash
+# Requires the GitHub CLI (`gh`) with attestation support.
+gh release download v0.5.0 --repo avishayil/attestarc-skill \
+  --pattern 'attestarc-skill-*.tar.gz'
+python install.py --from-tarball attestarc-skill-v0.5.0.tar.gz --scope user
 ```
 
 Then, in Claude Code, run `/attestarc`.

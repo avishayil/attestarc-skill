@@ -836,3 +836,125 @@ def test_verify_promotions_review_decision_needs_approval(tmp_path, repo_root,
 def test_promotions_dir_is_root_of_trust():
     facts = kc.classify_change_paths(["knowledge/promotions/KE-x.decision.json"])
     assert facts["changes_root_of_trust"] is True
+
+
+# --------------------------------------------------------------------------- #
+# PR-G WS-H1: the Updater-only trusted fetch adapter (fetch_and_quarantine).
+# The allowlist is enforced BEFORE any network access; every failure fails
+# closed (fetched: False, no receipt). Network-touching branches (size cap,
+# non-UTF-8, redirect provenance) are exercised with a monkeypatched opener so
+# the suite stays offline and stdlib-only.
+# --------------------------------------------------------------------------- #
+class _FakeResp:
+    """Minimal stand-in for the object opener.open() yields as a context manager."""
+
+    def __init__(self, body: bytes, final_url: str):
+        self._body = body
+        self._final = final_url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def geturl(self):
+        return self._final
+
+    def read(self, n=-1):
+        return self._body if n is None or n < 0 else self._body[:n]
+
+
+def _fake_opener(body: bytes, final_url: str):
+    class _Opener:
+        def open(self, req, timeout=None):
+            return _FakeResp(body, final_url)
+    return _Opener()
+
+
+def test_fetch_off_allowlist_is_refused_before_network(tmp_path, knowledge_dir,
+                                                       monkeypatch):
+    """An off-allowlist URL is refused by classify_source and NEVER fetched — the
+    opener is not even built."""
+    reg = kc.load_registry(knowledge_dir)
+
+    def _boom(*a, **k):  # network must not be reached
+        raise AssertionError("build_opener called for an off-allowlist URL")
+
+    monkeypatch.setattr(kc.urllib.request, "build_opener", _boom)
+    res = kc.fetch_and_quarantine(
+        "https://evil.example.com/poison", str(tmp_path / "q"), reg)
+    assert res["fetched"] is False and res["allowed"] is False
+
+
+def test_fetch_non_https_is_refused_before_network(tmp_path, knowledge_dir,
+                                                    monkeypatch):
+    reg = kc.load_registry(knowledge_dir)
+    monkeypatch.setattr(
+        kc.urllib.request, "build_opener",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("fetched cleartext")))
+    res = kc.fetch_and_quarantine(
+        "http://docs.github.com/x", str(tmp_path / "q"), reg)
+    assert res["fetched"] is False and res["allowed"] is False
+
+
+def test_fetch_allowlisted_url_quarantines_with_provenance(tmp_path, knowledge_dir,
+                                                           monkeypatch):
+    reg = kc.load_registry(knowledge_dir)
+    url = "https://docs.github.com/x"
+    monkeypatch.setattr(kc.urllib.request, "build_opener",
+                        lambda *a, **k: _fake_opener(b"doc body", url))
+    res = kc.fetch_and_quarantine(url, str(tmp_path / "q"), reg,
+                                  retrieved_at="2026-08-24T00:00:00Z")
+    assert res["fetched"] is True and res["allowed"] is True
+    assert res["requested_url"] == url and res["final_url"] == url
+    assert res["authority"] == 100
+    # The receipt is self-verifying: it resolves back from disk.
+    assert kc.resolve_receipt(res["receipt_id"], str(tmp_path / "q"), reg)
+
+
+def test_fetch_over_cap_body_is_discarded(tmp_path, knowledge_dir, monkeypatch):
+    reg = kc.load_registry(knowledge_dir)
+    url = "https://docs.github.com/x"
+    # Body one byte past the cap; the adapter reads cap+1 to detect this without
+    # trusting Content-Length.
+    monkeypatch.setattr(kc.urllib.request, "build_opener",
+                        lambda *a, **k: _fake_opener(b"x" * 11, url))
+    res = kc.fetch_and_quarantine(url, str(tmp_path / "q"), reg, max_bytes=10)
+    assert res["fetched"] is False and res["allowed"] is False
+    assert "cap" in res["reason"]
+
+
+def test_fetch_non_utf8_body_is_discarded(tmp_path, knowledge_dir, monkeypatch):
+    reg = kc.load_registry(knowledge_dir)
+    url = "https://docs.github.com/x"
+    monkeypatch.setattr(kc.urllib.request, "build_opener",
+                        lambda *a, **k: _fake_opener(b"\xff\xfe\x00binary", url))
+    res = kc.fetch_and_quarantine(url, str(tmp_path / "q"), reg)
+    assert res["fetched"] is False and "UTF-8" in res["reason"]
+
+
+def test_fetch_failure_fails_closed(tmp_path, knowledge_dir, monkeypatch):
+    reg = kc.load_registry(knowledge_dir)
+    url = "https://docs.github.com/x"
+
+    class _Boom:
+        def open(self, req, timeout=None):
+            raise kc.urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(kc.urllib.request, "build_opener", lambda *a, **k: _Boom())
+    res = kc.fetch_and_quarantine(url, str(tmp_path / "q"), reg)
+    assert res["fetched"] is False and res["allowed"] is False
+
+
+def test_recording_redirect_handler_refuses_non_https_hop():
+    """A 302 to an http:// target is refused outright (no cleartext downgrade),
+    and https hops are recorded for the cross-origin check."""
+    h = kc._RecordingRedirectHandler()
+    try:
+        h.redirect_request(None, None, 302, "Found", {},
+                           "http://docs.github.com/x")
+        assert False, "expected a non-HTTPS redirect to be refused"
+    except kc.urllib.error.URLError:
+        pass
+    assert h.chain == []

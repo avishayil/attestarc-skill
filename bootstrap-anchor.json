@@ -1,0 +1,8 @@
+{
+  "_type": "attestarc-bootstrap-anchor",
+  "comment": "External root of trust for the SKILL PACKAGE distribution (distinct from knowledge/trust-anchor.json, which anchors knowledge bundles). It pins the Sigstore build-provenance identity an official AttestArc skill-release tarball must carry, and lives OUTSIDE the tarball it verifies (a bundle can never declare its own trust). install.py --from-tarball runs `gh attestation verify` against this identity BEFORE extracting/installing. A plain `git clone --branch <tag>` does NOT verify the tag's SSH signature; the attested-tarball path is the cryptographic install-time check. Root-of-trust: two-party review (THREAT_MODEL.md §6).",
+  "repo": "avishayil/attestarc-skill",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "signer_workflow_ref": ".github/workflows/release-skill.yml",
+  "cert_identity_regexp": "^https://github\\.com/avishayil/attestarc-skill/\\.github/workflows/release-skill\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+}

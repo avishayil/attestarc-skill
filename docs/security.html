@@ -129,7 +129,8 @@
             <p>Attested, versioned, temporal, provenance-backed packs (<code>knowledge/</code>). Refreshed
               by the Updater, never by the Assessor.</p>
             <p class="rule">Drives a conclusion <strong>only after the verification chain passes</strong>;
-              the in-package snapshot is bootstrap-trusted because it rode in on the signed release.</p>
+              the in-package snapshot is bootstrap-trusted because it rode in with the skill package
+              (whose own authenticity is checked at install time by the attested-tarball path, below).</p>
           </div>
           <div class="zone candidate">
             <span class="tag">Candidate knowledge · untrusted</span>
@@ -184,9 +185,12 @@
     <section aria-labelledby="flow-h">
       <div class="container">
         <h2 id="flow-h" class="reveal">Attestation-anchored updates</h2>
-        <p class="muted reveal">The root of trust is an <strong>external anchor</strong>
-          (<code>knowledge/trust-anchor.json</code>) that ships inside the SSH-signed skill release and
-          lives <em>outside</em> any downloaded bundle. It pins the Sigstore build-provenance identity
+        <p class="muted reveal">The root of trust for <em>knowledge bundles</em> is an
+          <strong>external anchor</strong>
+          (<code>knowledge/trust-anchor.json</code>) that ships inside the skill package and
+          lives <em>outside</em> any downloaded bundle. (The <em>package itself</em> is authenticated
+          at install time by a separate anchor — see "Installing the package" below.) It pins the
+          Sigstore build-provenance identity
           (repo + signer workflow + the reviewed git <em>ref</em> + OIDC issuer) an official bundle must
           have been produced under — the identity check binds the certificate's trailing <code>@&lt;ref&gt;</code>,
           not just the workflow path, so an attestation minted from an unreviewed branch is rejected — and a
@@ -249,6 +253,28 @@
           <code>prev_digest</code> chain is checked against a <strong>high-water manifest head</strong> that
           only moves forward — a revocation can roll the active snapshot back to an older last-known-good but
           never lowers that head, so an in-order release after a revocation still chains and installs.</p>
+
+        <h3 class="reveal" style="margin-top:2rem">Installing the package</h3>
+        <p class="muted reveal">The story above authenticates <em>knowledge bundles</em>. The
+          <strong>skill package</strong> itself has a separate root of trust,
+          <code>bootstrap-anchor.json</code>, which lives at the repo root <em>outside</em> the shipped
+          payload. We are precise about what install-time verification you actually get:</p>
+        <ul class="muted reveal">
+          <li><strong>A <code>git clone</code> of a signed release tag does <em>not</em> verify the tag's
+            SSH signature.</strong> Git checks out the ref; it validates no signature unless you run
+            <code>git verify-tag</code>. Installing from a clone is fully supported (and still runs the
+            in-package knowledge integrity + trust-contract gate), but makes <em>no</em> cryptographic
+            claim about who produced the package.</li>
+          <li><strong>The cryptographic install-time check is
+            <code>python install.py --from-tarball &lt;path&gt;</code>.</strong> It runs
+            <code>gh attestation verify</code> on the release tarball against
+            <code>bootstrap-anchor.json</code> (repo + OIDC issuer + the
+            <code>release-skill.yml@refs/tags/v&lt;semver&gt;</code> identity) <em>before extracting
+            anything</em>, then safe-extracts and installs only the verified contents. The tarball is
+            produced and attested by <code>release-skill.yml</code> under the same exact-HEAD gate as the
+            knowledge release. Fail-secure: a missing <code>gh</code>, a verify failure, or a missing
+            anchor aborts the install with nothing extracted.</li>
+        </ul>
       </div>
     </section>
 

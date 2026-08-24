@@ -179,6 +179,126 @@ def test_atomic_copy_leaves_no_staging_dirs(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# attested-tarball install path (bootstrap-anchor + gh attestation verify)
+# --------------------------------------------------------------------------- #
+def test_load_bootstrap_anchor_reads_shipped_anchor():
+    anchor = install.load_bootstrap_anchor()
+    assert anchor["repo"] and anchor["issuer"] and anchor["cert_identity_regexp"]
+    # the identity regexp must compile (load_bootstrap_anchor asserts this too)
+    import re
+    re.compile(anchor["cert_identity_regexp"])
+
+
+def test_load_bootstrap_anchor_missing_is_hard_error(tmp_path):
+    with pytest.raises(install.InstallError, match="root of trust"):
+        install.load_bootstrap_anchor(str(tmp_path))
+
+
+def test_load_bootstrap_anchor_missing_field_is_error(tmp_path):
+    import json
+    (tmp_path / install.BOOTSTRAP_ANCHOR).write_text(
+        json.dumps({"repo": "avishayil/attestarc-skill"}))  # no issuer/regexp
+    with pytest.raises(install.InstallError, match="missing required field"):
+        install.load_bootstrap_anchor(str(tmp_path))
+
+
+def test_verify_release_tarball_fails_closed_without_gh(tmp_path, monkeypatch):
+    tb = tmp_path / "pkg.tar.gz"
+    tb.write_bytes(b"x")
+    anchor = install.load_bootstrap_anchor()
+    monkeypatch.setattr(install.shutil, "which", lambda _: None)
+    with pytest.raises(install.InstallError, match="gh CLI not found"):
+        install.verify_release_tarball(str(tb), anchor)
+
+
+def test_verify_release_tarball_fails_on_nonzero_gh(tmp_path, monkeypatch):
+    tb = tmp_path / "pkg.tar.gz"
+    tb.write_bytes(b"x")
+    anchor = install.load_bootstrap_anchor()
+    monkeypatch.setattr(install.shutil, "which", lambda _: "/usr/bin/gh")
+
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "no attestation found"
+
+    monkeypatch.setattr(install.subprocess, "run", lambda *a, **k: _Proc())
+    with pytest.raises(install.InstallError, match="failed attestation verification"):
+        install.verify_release_tarball(str(tb), anchor)
+
+
+def test_verify_release_tarball_passes_on_zero_gh(tmp_path, monkeypatch):
+    tb = tmp_path / "pkg.tar.gz"
+    tb.write_bytes(b"x")
+    anchor = install.load_bootstrap_anchor()
+    monkeypatch.setattr(install.shutil, "which", lambda _: "/usr/bin/gh")
+    calls = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "verified"
+        stderr = ""
+
+    def _run(cmd, **k):
+        calls["cmd"] = cmd
+        return _Proc()
+
+    monkeypatch.setattr(install.subprocess, "run", _run)
+    install.verify_release_tarball(str(tb), anchor)  # no raise
+    # the anchor identity is passed through to gh, not caller-chosen
+    assert "--cert-identity-regexp" in calls["cmd"]
+    assert anchor["cert_identity_regexp"] in calls["cmd"]
+    assert "--cert-oidc-issuer" in calls["cmd"]
+
+
+def _build_payload_tarball(path: str) -> None:
+    """Tar the shipped SKILL_PAYLOAD at the archive root (as release-skill.yml does)."""
+    import tarfile
+    src = install.source_skill_dir()
+    with tarfile.open(path, "w:gz") as tf:
+        for entry in install.SKILL_PAYLOAD:
+            p = os.path.join(src, entry)
+            if os.path.exists(p):
+                tf.add(p, arcname=entry)
+
+
+def test_install_from_tarball_verifies_then_installs(tmp_path, monkeypatch):
+    """End-to-end: verification runs FIRST, then safe-extract + install from the
+    verified contents. gh is stubbed out; the extract + install is real."""
+    tb = str(tmp_path / "attestarc-skill-vtest.tar.gz")
+    _build_payload_tarball(tb)
+    order = []
+    monkeypatch.setattr(install, "verify_release_tarball",
+                        lambda p, a: order.append("verify"))
+    real_extract = None
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    results = install.install_from_tarball(
+        tb, ["claude"], "project", str(proj), force=False, dry_run=False)
+    assert order == ["verify"]  # verify happened (and before install)
+    assert results[0]["action"] == "installed"
+    assert os.path.exists(
+        os.path.join(str(proj), ".claude", "skills", "attestarc", "SKILL.md"))
+
+
+def test_install_from_tarball_aborts_if_verify_fails(tmp_path, monkeypatch):
+    """A verification failure aborts before anything is extracted/installed."""
+    tb = str(tmp_path / "pkg.tar.gz")
+    _build_payload_tarball(tb)
+
+    def _fail(p, a):
+        raise install.InstallError("bad provenance")
+
+    monkeypatch.setattr(install, "verify_release_tarball", _fail)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    with pytest.raises(install.InstallError, match="bad provenance"):
+        install.install_from_tarball(tb, ["claude"], "project", str(proj),
+                                     force=False, dry_run=False)
+    assert not os.path.exists(os.path.join(str(proj), ".claude"))
+
+
+# --------------------------------------------------------------------------- #
 # uninstall
 # --------------------------------------------------------------------------- #
 def test_uninstall_removes_only_the_skill(tmp_path):

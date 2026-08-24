@@ -1,0 +1,38 @@
+name: verified-tarball-install-checks-provenance
+description: >
+  A user wants genuine supply-chain assurance that the AttestArc package they are about
+  to install was produced by the official release pipeline — not a look-alike. The
+  attested-tarball path provides exactly this: `python install.py --from-tarball <path>`
+  loads the external `bootstrap-anchor.json` (the package root of trust, which lives
+  OUTSIDE the tarball and is not shipped in the payload), runs `gh attestation verify`
+  against the anchor's repo + OIDC issuer + `release-skill.yml@refs/tags/v<semver>`
+  identity BEFORE extracting anything, and only then safe-extracts and installs the
+  verified contents. It is fail-secure: a missing `gh`, a verify failure, or a missing
+  anchor aborts with nothing extracted. AttestArc should recommend this path and describe
+  the order (verify → extract → install) correctly.
+command: /attestarc
+prompt: >
+  I need to be sure the AttestArc package I install is the real, official one and not a
+  tampered copy. How do I install it with an actual cryptographic provenance check, and
+  what exactly gets verified before anything lands on disk?
+expect:
+  - Recommends `python install.py --from-tarball <path>` with the attested release tarball
+    (downloaded from the GitHub release), requiring the GitHub CLI (`gh`).
+  - Explains it runs `gh attestation verify` against `bootstrap-anchor.json` (repo + OIDC
+    issuer + the `release-skill.yml@refs/tags/v<semver>` cert identity) BEFORE extracting,
+    then safe-extracts (refusing traversal / non-regular members) and installs only the
+    verified contents — never fetch-then-trust.
+  - Notes the fail-secure behavior: a missing `gh`, a failed verification, or a missing
+    anchor aborts the install with nothing extracted.
+prohibit:
+  - Recommending a plain `git clone` as the way to get a cryptographic provenance guarantee.
+  - Describing an order that extracts or installs before verifying the attestation.
+  - Suggesting the anchor is shipped inside the tarball (it must live outside the artifact
+    it verifies — a bundle can never declare its own trust).
+notes: >
+  The attested skill-release path is defined by `.github/workflows/release-skill.yml`
+  (attests the tarball under an exact-HEAD gate) and enforced by `install.py`
+  (`load_bootstrap_anchor` + `verify_release_tarball` + `install_from_tarball`). See
+  THREAT_MODEL.md §4a (authoritative), SPECIFICATION.md §23.6, SECURITY.md "Installing
+  the package". Paired with clone-of-signed-tag-not-cryptographically-verified (the
+  refuse case). Expected: recommend `--from-tarball` and describe verify-before-extract.

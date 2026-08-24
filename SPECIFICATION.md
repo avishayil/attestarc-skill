@@ -986,8 +986,10 @@ was in force — not today's semantics applied backward.
 
 ### 23.3 Update security (attestation-based)
 
-The root of trust is an **external anchor** (`knowledge/trust-anchor.json`) that
-ships inside the SSH-signed skill release and lives OUTSIDE any downloaded bundle;
+The root of trust for *knowledge bundles* is an **external anchor**
+(`knowledge/trust-anchor.json`) that ships inside the skill package and lives
+OUTSIDE any downloaded bundle (the *package itself* is authenticated separately —
+§23.6);
 it pins the Sigstore build-provenance identity (repo + signer workflow + the
 reviewed git **ref** + OIDC issuer) an official bundle must have been produced under.
 The identity is enforced by an **artifact-specific** SAN regexp, which binds the
@@ -999,7 +1001,8 @@ impersonate the other and an attestation minted from an unreviewed branch — or
 wrong ref for its kind — does not satisfy the anchor. (A legacy combined
 `cert_identity_regexp` is honored only as a fallback when the per-artifact keys are
 absent.) A bundle can therefore never declare its own trust, and the in-package snapshot
-is bootstrap-trusted ONLY because it rode in on the attested skill release. Upstream CI
+is bootstrap-trusted ONLY because it rode in with the skill package (whose own
+authenticity is established at install time by §23.6, not by this anchor). Upstream CI
 attests **both** `knowledge/manifest.json` (version, expiry, `prev_digest`, per-pack
 `{sha256,size}`) **and** the published `.tar.gz` with GitHub Artifact Attestations. A
 normal bundle is produced ONLY by a push of a `knowledge-v*` tag and only when the
@@ -1108,6 +1111,34 @@ repositories) via `_pathsafe` with a root distinct from — and never derived fr
 the assessed repository. `scripts/knowledge_compile.py` is the Updater's ingest
 tool (§24.1). The repo-local runtime artifact remains only `.attestarc/findings.json`
 (§5); the knowledge cache lives outside any assessed repository.
+
+### 23.6 Distribution security (the skill package)
+
+§23.3 authenticates *knowledge bundles*; the **skill package** itself has a
+separate root of trust, `bootstrap-anchor.json`, which lives at the repository
+root OUTSIDE the shipped payload (it is NOT in `SKILL_PAYLOAD` — a bundle can never
+declare its own trust). The specification is honest about what install-time
+verification provides:
+
+- A `git clone --branch <tag>` of a signed release tag SHALL NOT be described as
+  cryptographically verifying the package: git checks out the ref without
+  validating the tag's SSH signature unless the caller runs `git verify-tag`.
+  Installing from a clone is supported and still runs the in-package knowledge
+  integrity + trust-contract gate (§23.3, `verify_bundled_knowledge`), but makes no
+  provenance claim about the package.
+- The cryptographic install-time check SHALL be the attested-tarball path.
+  `.github/workflows/release-skill.yml` (root-of-trust) SHALL package exactly
+  `SKILL_PAYLOAD` into `attestarc-skill-<tag>.tar.gz`, attest it with GitHub
+  Artifact Attestations under the identity
+  `release-skill.yml@refs/tags/v<semver>`, self-verify, and publish it, under the
+  same **exact-HEAD** gate as the knowledge release (refuse to sign unless the
+  tagged commit is the current tip of `origin/main`).
+- `install.py --from-tarball <path>` SHALL load `bootstrap-anchor.json`, run
+  `gh attestation verify` against its repo + OIDC issuer + `cert_identity_regexp`
+  BEFORE extracting anything, and only then safe-extract
+  (`_pathsafe.safe_extract_tar`) and install from the verified contents. Any
+  failure — missing `gh`, verify failure, or missing anchor — SHALL abort the
+  install with nothing extracted (fail-secure; never fetch-then-trust).
 
 ## 24. Evolution loop
 

@@ -119,7 +119,7 @@ the relevant entry inline as `KE-…`.
 - At the start of an assessment, confirm the snapshot verifies (integrity of the
   bundled packs against `manifest.json`, trusted via the external
   `trust-anchor.json` — the in-package snapshot is bootstrap-trusted because it rode
-  in on the signed skill release, or a refreshed snapshot is trusted only if client
+  in with the skill package, or a refreshed snapshot is trusted only if client
   state records it was attested). If it does not trust, treat platform facts as
   unavailable and route affected chains to `needs_review`. The `lookup`/`explain`
   path is verify-gated: `knowledge.py open_verified` returns nothing that can drive

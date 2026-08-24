@@ -31,11 +31,20 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 
 SKILL_NAME = "attestarc"
+
+# External root of trust for the DISTRIBUTED PACKAGE. It lives next to this
+# installer (repo root), OUTSIDE the tarball it verifies, and is NOT part of
+# SKILL_PAYLOAD — a bundle can never declare its own trust. `--from-tarball`
+# verifies a release tarball's Sigstore build provenance against this anchor
+# before extracting anything. See bootstrap-anchor.json and THREAT_MODEL.md §6.
+BOOTSTRAP_ANCHOR = "bootstrap-anchor.json"
 
 # Only these top-level entries are shipped into an installed skill. Everything
 # else in the repo (tests/, evals/, evolution/, installer, pyproject, CLAUDE.md,
@@ -260,9 +269,122 @@ def _atomic_copy_tree(source: str, dest: str) -> None:
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def load_bootstrap_anchor(anchor_dir: str | None = None) -> dict:
+    """Load and sanity-check bootstrap-anchor.json (the package root of trust).
+
+    Looked up next to this installer by default. It pins the Sigstore
+    build-provenance identity an official skill-release tarball must carry:
+    ``repo``, ``issuer``, and ``cert_identity_regexp``. A missing anchor is a
+    hard error — we never fall back to installing an unverified tarball.
+    """
+    base = anchor_dir or source_skill_dir()
+    path = os.path.join(base, BOOTSTRAP_ANCHOR)
+    if not os.path.exists(path):
+        raise InstallError(
+            f"{BOOTSTRAP_ANCHOR} not found next to the installer; cannot verify a "
+            f"release tarball without the package root of trust")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            anchor = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InstallError(f"{BOOTSTRAP_ANCHOR} is unparseable: {exc}")
+    for key in ("repo", "issuer", "cert_identity_regexp"):
+        if not anchor.get(key):
+            raise InstallError(
+                f"{BOOTSTRAP_ANCHOR} is missing required field {key!r}")
+    try:
+        re.compile(anchor["cert_identity_regexp"])
+    except re.error as exc:
+        raise InstallError(
+            f"{BOOTSTRAP_ANCHOR} cert_identity_regexp is not a valid regexp: {exc}")
+    return anchor
+
+
+def verify_release_tarball(tarball_path: str, anchor: dict) -> None:
+    """Cryptographically verify a release tarball before it is extracted.
+
+    Shells out to the system ``gh attestation verify`` (no Python crypto
+    dependency — the same tool the Updater and the release workflows use) to
+    confirm the tarball carries a Sigstore build-provenance attestation whose
+    certificate identity matches the bootstrap anchor's repo, OIDC issuer, and
+    ``cert_identity_regexp`` (which pins ``release-skill.yml@refs/tags/v<semver>``).
+
+    Fail-secure: a missing ``gh``, a non-zero exit, or any error means the
+    tarball is NOT trusted and MUST NOT be extracted. A plain ``git clone`` of a
+    signed tag does not verify the tag signature; THIS is the install-time crypto
+    check. Raises :class:`InstallError` on any failure.
+    """
+    if not os.path.exists(tarball_path):
+        raise InstallError(f"release tarball not found: {tarball_path}")
+    if shutil.which("gh") is None:
+        raise InstallError(
+            "gh CLI not found; cannot verify the release tarball's attestation. "
+            "Install GitHub CLI (with the attestation extension) or install from a "
+            "source checkout you trust.")
+    cmd = [
+        "gh", "attestation", "verify", tarball_path,
+        "--repo", anchor["repo"],
+        "--cert-identity-regexp", anchor["cert_identity_regexp"],
+        "--cert-oidc-issuer", anchor["issuer"],
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        raise InstallError(f"failed to run gh attestation verify: {exc}")
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise InstallError(
+            "release tarball failed attestation verification against "
+            f"{BOOTSTRAP_ANCHOR} (repo={anchor['repo']}); refusing to install an "
+            f"unverified package.\n{detail}")
+
+
+def install_from_tarball(tarball_path: str, platforms, scope: str,
+                         target: str | None, force: bool, dry_run: bool,
+                         anchor_dir: str | None = None) -> list[dict]:
+    """Verify an attested release tarball, then install from its contents.
+
+    Order matters: the tarball is attestation-verified against the bootstrap
+    anchor FIRST, then safe-extracted (member-by-member, refusing traversal /
+    non-regular members via :func:`scripts._pathsafe.safe_extract_tar`) into a
+    temp dir, and only that extracted, verified tree is used as the install
+    source. Never fetch-then-trust: nothing is extracted before verification.
+    """
+    anchor = load_bootstrap_anchor(anchor_dir)
+    verify_release_tarball(tarball_path, anchor)
+
+    # safe_extract_tar ships with the installer, in scripts/. Import it the same
+    # way _validate_bundled_snapshot imports the knowledge helpers.
+    scripts_dir = os.path.join(source_skill_dir(), "scripts")
+    inserted = scripts_dir not in sys.path
+    if inserted:
+        sys.path.insert(0, scripts_dir)
+    try:
+        import _pathsafe
+        safe_extract_tar = _pathsafe.safe_extract_tar
+    finally:
+        if inserted and scripts_dir in sys.path:
+            sys.path.remove(scripts_dir)
+
+    workdir = tempfile.mkdtemp(prefix=".attestarc-tarball-")
+    try:
+        extract_root = os.path.join(workdir, "extracted")
+        safe_extract_tar(tarball_path, extract_root)
+        # The workflow tars the payload entries at the archive root, so the
+        # extracted tree is itself the skill source.
+        results = []
+        for platform in platforms:
+            results.append(install_one(platform, scope, target, force, dry_run,
+                                       source=extract_root))
+        return results
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def install_one(platform: str, scope: str, target: str | None,
-                force: bool, dry_run: bool) -> dict:
-    source = source_skill_dir()
+                force: bool, dry_run: bool, source: str | None = None) -> dict:
+    if source is None:
+        source = source_skill_dir()
     version = validate_source(source)
     dest = dest_dir(platform, scope, target)
 
@@ -307,24 +429,39 @@ def main(argv=None) -> int:
                    help="reinstall even if the same version is present")
     p.add_argument("--dry-run", action="store_true",
                    help="report what would happen without copying")
+    p.add_argument("--from-tarball", default=None, metavar="PATH",
+                   help="install from an attested release tarball: verify its "
+                        "Sigstore provenance against bootstrap-anchor.json with "
+                        "'gh attestation verify' BEFORE extracting, then install "
+                        "from the verified contents (a git clone of a signed tag "
+                        "does not verify the tag signature; this does)")
     args = p.parse_args(argv)
 
     if args.target and args.scope != "project":
         sys.stderr.write("warning: --target is ignored for --scope user\n")
 
+    def _report(result):
+        verb = result["action"].replace("-", " ")
+        extra = ""
+        if result["installed_version"]:
+            extra = f" (was {result['installed_version']})"
+        print(f"{result['platform']}: {verb} v{result['version']}{extra} -> "
+              f"{result['dest']}")
+        if result["platform"] == "cursor":
+            print("       (Cursor natively discovers .cursor/skills/; "
+                  "invoke it with /attestarc in Agent chat — see README)")
+
     try:
-        for platform in _platforms(args.platform):
-            result = install_one(platform, args.scope, args.target,
-                                 args.force, args.dry_run)
-            verb = result["action"].replace("-", " ")
-            extra = ""
-            if result["installed_version"]:
-                extra = f" (was {result['installed_version']})"
-            print(f"{platform}: {verb} v{result['version']}{extra} -> "
-                  f"{result['dest']}")
-            if platform == "cursor":
-                print("       (Cursor natively discovers .cursor/skills/; "
-                      "invoke it with /attestarc in Agent chat — see README)")
+        if args.from_tarball:
+            results = install_from_tarball(
+                args.from_tarball, _platforms(args.platform), args.scope,
+                args.target, args.force, args.dry_run)
+            for result in results:
+                _report(result)
+        else:
+            for platform in _platforms(args.platform):
+                _report(install_one(platform, args.scope, args.target,
+                                    args.force, args.dry_run))
     except InstallError as exc:
         sys.stderr.write(f"error: {exc}\n")
         return 2

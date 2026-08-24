@@ -37,6 +37,7 @@ quarantine directory the caller names.
 from __future__ import annotations
 
 import argparse
+import datetime
 import glob
 import hashlib
 import json
@@ -44,6 +45,8 @@ import os
 import posixpath
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from urllib.parse import urlsplit
 
 import state  # reuse the shared secret guard
@@ -331,6 +334,94 @@ def quarantine(raw: str, url: str, out_dir: str, registry: dict,
     with open(receipt_path, "w", encoding="utf-8") as fh:
         json.dump(receipt, fh, indent=2, sort_keys=True)
     receipt["receipt_path"] = receipt_path
+    return receipt
+
+
+# --------------------------------------------------------------------------- #
+# fetch adapter (Updater-only — NEVER on the assessor path)
+# --------------------------------------------------------------------------- #
+# Body-size cap for a fetched document. A source larger than this is discarded
+# rather than quarantined (defense against a resource-exhaustion / decompression
+# response from a compromised-but-allowlisted origin).
+_MAX_FETCH_BYTES = 5 * 1024 * 1024  # 5 MiB
+
+
+class _RecordingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow redirects but **record every hop** and refuse a non-HTTPS target.
+
+    The recorded chain is what ``quarantine`` uses to mark a cross-origin redirect
+    not-allowed. Refusing a non-HTTPS hop here stops a downgrade (an allowlisted
+    HTTPS URL that 302s to ``http://`` never gets fetched over cleartext)."""
+
+    def __init__(self):
+        super().__init__()
+        self.chain: list = []
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not (newurl or "").lower().startswith("https://"):
+            raise urllib.error.URLError(
+                f"refusing non-HTTPS redirect to {newurl!r}")
+        self.chain.append(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def fetch_and_quarantine(url: str, out_dir: str, registry: dict,
+                         retrieved_at: str = None,
+                         max_bytes: int = _MAX_FETCH_BYTES,
+                         timeout: int = 30) -> dict:
+    """Fetch an allowlisted HTTPS URL and quarantine it — the **Updater** path.
+
+    This is the ONE place AttestArc touches the network, and it is never invoked
+    during an assessment (the Assessor has no network and no fetch step). The model
+    supplies only the *requested* URL; the raw bytes, the **final** URL, and the
+    **redirect chain** all come from the network here — never from the model — so a
+    model cannot fabricate provenance. Fail-closed on every error: a fetch that
+    cannot be completed, exceeds the size cap, is not HTTPS end-to-end, or is not
+    UTF-8 text is discarded (no receipt), returning ``fetched: False``.
+
+    The allowlist is checked BEFORE any network access (``classify_source``); an
+    off-allowlist URL is never fetched. A redirect that lands off the final origin
+    is still recorded and marked not-allowed by ``quarantine`` (trust follows the
+    final origin), and a non-HTTPS redirect target is refused outright."""
+    fact = classify_source(url, registry)
+    if not fact.get("allowed"):
+        return {"fetched": False, "allowed": False, "url": url,
+                "reason": fact.get("reason", "not on the source allowlist")}
+    # classify_source already enforces HTTPS; re-assert as defense-in-depth.
+    if not url.lower().startswith("https://"):
+        return {"fetched": False, "allowed": False, "url": url,
+                "reason": "non-https source rejected"}
+
+    handler = _RecordingRedirectHandler()
+    opener = urllib.request.build_opener(handler)
+    req = urllib.request.Request(
+        url, method="GET", headers={"User-Agent": "attestarc-updater"})
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            final_url = resp.geturl()
+            # Read one byte past the cap so an over-cap body is detectable without
+            # trusting Content-Length (a lying header cannot smuggle a huge body).
+            raw_bytes = resp.read(max_bytes + 1)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return {"fetched": False, "allowed": False, "url": url,
+                "reason": f"fetch failed: {exc}"}
+    if len(raw_bytes) > max_bytes:
+        return {"fetched": False, "allowed": False, "url": url,
+                "final_url": final_url,
+                "reason": f"response exceeds {max_bytes}-byte cap; discarded"}
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"fetched": False, "allowed": False, "url": url,
+                "final_url": final_url,
+                "reason": "response is not valid UTF-8 text; discarded"}
+
+    retrieved_at = retrieved_at or (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0).isoformat().replace("+00:00", "Z"))
+    receipt = quarantine(raw, final_url, out_dir, registry, retrieved_at,
+                         requested_url=url, redirect_chain=handler.chain)
+    receipt["fetched"] = True
     return receipt
 
 
@@ -916,11 +1007,30 @@ def cmd_check_source(args) -> int:
 
 
 def cmd_quarantine(args) -> int:
+    """Offline quarantine of bytes the host already fetched (stdin). The redirect
+    provenance the host fetch adapter observed is threaded through so a receipt from
+    this path carries the same requested/final/redirect facts as the networked
+    ``fetch-quarantine`` path — a redirect that crosses origin is still marked
+    not-allowed. ``--url`` is the FINAL url the bytes were served from."""
     registry = load_registry(args.knowledge_root or _DEFAULT_KNOWLEDGE_ROOT)
     raw = sys.stdin.read()
-    fact = quarantine(raw, args.url, args.out, registry, args.retrieved_at)
+    fact = quarantine(raw, args.url, args.out, registry, args.retrieved_at,
+                      requested_url=args.requested_url,
+                      redirect_chain=args.redirect)
     print(json.dumps(fact, indent=2, sort_keys=True))
     return 0
+
+
+def cmd_fetch_quarantine(args) -> int:
+    """Updater-only: fetch an allowlisted HTTPS URL and quarantine it in one step.
+    The bytes/final-url/redirects come from the network, not the model. Exits 1 if
+    the fetch is refused/discarded (fail-closed)."""
+    registry = load_registry(args.knowledge_root or _DEFAULT_KNOWLEDGE_ROOT)
+    fact = fetch_and_quarantine(args.url, args.out, registry,
+                                retrieved_at=args.retrieved_at,
+                                max_bytes=args.max_bytes, timeout=args.timeout)
+    print(json.dumps(fact, indent=2, sort_keys=True))
+    return 0 if fact.get("fetched") else 1
 
 
 def cmd_validate(args) -> int:
@@ -1353,11 +1463,33 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("quarantine", parents=[common],
                         help="store a fetched doc (stdin) by content hash + "
                              "emit a provenance receipt")
-    sp.add_argument("--url", required=True)
+    sp.add_argument("--url", required=True,
+                    help="the FINAL url the bytes were served from (classified)")
     sp.add_argument("--out", required=True, help="quarantine directory")
     sp.add_argument("--retrieved-at", required=True,
                     help="fetch timestamp (ISO 8601), supplied by the caller")
+    sp.add_argument("--requested-url", default=None,
+                    help="the url the fetch STARTED at (defaults to --url); a "
+                         "cross-origin hop marks the receipt not-allowed")
+    sp.add_argument("--redirect", action="append", default=[],
+                    help="a redirect hop url the host fetch observed (repeatable)")
     sp.set_defaults(func=cmd_quarantine)
+
+    sp = sub.add_parser("fetch-quarantine", parents=[common],
+                        help="UPDATER-ONLY: fetch an allowlisted HTTPS url and "
+                             "quarantine it (bytes/final-url/redirects come from "
+                             "the network, not the model); never on the assessor "
+                             "path")
+    sp.add_argument("--url", required=True, help="requested (starting) HTTPS url")
+    sp.add_argument("--out", required=True, help="quarantine directory")
+    sp.add_argument("--retrieved-at", default=None,
+                    help="fetch timestamp (ISO 8601); defaults to now (UTC)")
+    sp.add_argument("--max-bytes", type=int, default=_MAX_FETCH_BYTES,
+                    help=f"body-size cap (default {_MAX_FETCH_BYTES}); an over-cap "
+                         "response is discarded")
+    sp.add_argument("--timeout", type=int, default=30,
+                    help="socket timeout in seconds (default 30)")
+    sp.set_defaults(func=cmd_fetch_quarantine)
 
     sp = sub.add_parser("validate-candidate", parents=[common],
                         help="schema + provenance + secret checks (stdin)")
