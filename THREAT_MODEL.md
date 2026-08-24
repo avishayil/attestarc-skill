@@ -147,6 +147,36 @@ shells out to the system `gh attestation verify` (no Python crypto dependency;
 mirrors the `ssh-keygen` shell-out convention) and is required only in the Updater
 path — the Assessor verifies against recorded client state with no network or `gh`.
 
+**Verify → install → persist.** `verify_download` is a pure fact operation: it
+answers "should this bundle be installed?" and mutates nothing. Advancing the
+high-water mark and installing a snapshot is done by exactly one path,
+`knowledge_verify.py install <bundle>`, so verification can never leave client
+state half-advanced (the earlier TOCTOU where a bundle verified but nothing
+installed is closed). `install`:
+
+1. If `<bundle>` is an archive, **safe-extract** it (`_pathsafe.safe_extract_tar`,
+   itself root-of-trust) into a private staging dir — refusing absolute paths, `..`
+   traversal, and every non-regular member (symlink/hardlink/device/fifo) *before*
+   writing anything, and extracting member-by-member with our own IO (never
+   `tarfile.extractall`) so a malicious archive can neither escape staging nor plant
+   a link a later member follows out of it.
+2. Run `verify_download` (attestation + integrity + freshness + rollback +
+   `prev_digest` chain + revocation). Any failure → `discard`, nothing installed.
+3. Copy **only** the manifest and the declared packs into `snapshots/vN.tmp`,
+   re-verify the *staged* bytes against the (attested) manifest, then `os.replace`
+   into `snapshots/vN` — the install is atomic.
+4. Advance client state in a single atomic write: `highest_version`, `current`
+   (`{version, manifest_sha256, verified_via, path}`), and `history`.
+
+Client state and snapshot material live in **separate directories** —
+`~/.attestarc/state/` (rollback memory) and `~/.attestarc/knowledge/snapshots/`
+(installed material) — so corrupting one cannot damage the other. Persistent
+client state (`load_client_state`) fails **open only when absent** (a fresh machine
+legitimately starts at an empty floor); a *present-but-corrupt* state file means
+rollback memory was lost or tampered, so it is marked `_corrupt` and `install` /
+`verify_and_apply_revocation` **refuse to advance** until an explicit reinit, and
+the Assessor falls back to the in-package bootstrap.
+
 ## 5. Fail-secure runtime policy
 
 The runtime NEVER fetches-then-trusts. On any anomaly it degrades safely:
@@ -156,6 +186,8 @@ The runtime NEVER fetches-then-trusts. On any anomaly it degrades safely:
 | Attestation absent / identity mismatch (download) | **Discard** the download; keep the installed last-known-good |
 | Manifest/pack tampered, rolled back, or frozen (expired) | **Discard** the download; keep the installed last-known-good |
 | Downloaded bundle presents `mode: bootstrap` | **Reject** — bootstrap is valid ONLY for the in-package snapshot |
+| Downloaded archive contains an unsafe member (absolute path, `..`, symlink/hardlink/device) | **Refuse** the whole extract before writing anything; nothing is installed |
+| Client state present but corrupt/unparseable (rollback memory lost) | Mark `_corrupt` and **refuse** to advance state (`install`/revocation); Assessor falls back to the in-package bootstrap until explicit reinit |
 | Installed knowledge expired (stale/frozen) | Warn; snapshot stays trusted as the last-known-good floor, but a **stale down-gate** fact (`effect: mitigation`/`neutral`) no longer drives a conclusion (route to `needs_review`) — only `effect: risk-increasing` facts keep driving (failing toward scrutiny) |
 | Snapshot violates its own trust contract (schema / provenance-vs-registry / secret) | `validate_snapshot` withholds trust → set untrusted (`needs_review`); refused at install time |
 | A verified pack only partially parses (`parse_partial`) | Treat the whole set as inconsistent/untrusted — never reason over the lines that happened to parse |
@@ -183,7 +215,9 @@ The LLM may *propose*; it may never `promote()`.
   poisoning attempt takes).
 - **Two-party review** — changes to root-of-trust files: `core/agent-safety.md`,
   `core/promotion-policy.md`, `scripts/knowledge_verify.py`, `scripts/knowledge.py`,
-  `scripts/knowledge_compile.py`, `knowledge/sources.yaml`,
+  `scripts/knowledge_compile.py`, `scripts/_pathsafe.py` (the containment +
+  safe-extract helper the install path trusts against untrusted archives),
+  `knowledge/sources.yaml`,
   `knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json`,
   `schemas/learning-candidate.schema.json`, `.github/workflows/release-knowledge.yml`,
   or **any weakening/deletion of a trusted eval**.
@@ -218,6 +252,17 @@ A compromised knowledge version MUST be revocable: publishing a revocation cause
 clients to disable that version, roll back to the last verified snapshot, and mark
 findings assessed under it `requires_reverification`. This path is designed before
 it is needed.
+
+The **only** public revocation path is `verify_and_apply_revocation`: it
+attestation-verifies the revocation record against the trust anchor (same identity
+constraints as a bundle — an unattested or forged record is discarded and client
+state is left untouched), structurally validates it, records the revoked version(s),
+and rolls `current` back to the most recent retained non-revoked snapshot still on
+disk (or to the in-package bootstrap when none remains). It refuses to apply on a
+corrupt client state. The internal `_apply_revocation` (which trusts its caller)
+has no public entry point, so nothing can revoke — or, by extension, roll the active
+snapshot back — without a valid attestation. Rolling back never resolves a finding;
+dependents surface `requires_reverification` and the condition is re-observed.
 
 ## 9. Glossary
 

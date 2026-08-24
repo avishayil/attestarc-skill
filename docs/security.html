@@ -202,7 +202,7 @@
               <li>Not revoked.</li>
             </ol>
             <p class="verdict"><span class="discard">ANY failure → DISCARD the download, keep the LKG.</span><br>
-              <span class="trust">All pass → atomic install; record version + digest in client state.</span></p>
+              <span class="trust">All pass → eligible to install. <code>verify_download</code> decides; it mutates nothing.</span></p>
           </div>
           <div class="flow">
             <span class="step-label">verify_installed</span>
@@ -225,8 +225,19 @@
           files (the attestation covers the manifest, which pins every pack), and a malicious mirror. Trust
           is <strong>identity-constrained</strong>: a valid attestation for some <em>other</em>
           repo/workflow does not satisfy the anchor. Anti-rollback is judged against the client's own
-          persistent memory (<code>~/.attestarc/knowledge/trusted-state.json</code>), never a value inside
+          persistent memory (<code>~/.attestarc/state/trusted-state.json</code>), never a value inside
           the bundle.</p>
+
+        <p class="muted reveal" style="margin-top:1.5rem"><strong>Verify → install → persist.</strong>
+          Advancing the high-water mark is done by exactly one path — <code>install</code> — so a bundle can
+          never verify while state is left half-advanced. It <strong>safe-extracts</strong> an archive
+          (refusing absolute paths, <code>..</code>, and symlink/hardlink members <em>before</em> writing
+          anything, and extracting member-by-member rather than <code>extractall</code>), re-verifies the
+          staged bytes, atomically renames the snapshot into place, and only then atomically advances client
+          state. Rollback memory (<code>~/.attestarc/state/</code>) and installed snapshots
+          (<code>~/.attestarc/knowledge/snapshots/</code>) live in separate directories, and a
+          <em>corrupt</em> — not merely absent — client-state file fails closed: the Updater refuses to
+          advance and the assessor falls back to the in-package snapshot until an explicit reinit.</p>
       </div>
     </section>
 
@@ -244,6 +255,8 @@
               <tr><td>Attestation absent / identity mismatch (download)</td><td><strong>Discard</strong> the download; keep the installed last-known-good</td></tr>
               <tr><td>Manifest/pack tampered, rolled back, or frozen (expired)</td><td><strong>Discard</strong> the download; keep the installed last-known-good</td></tr>
               <tr><td>Downloaded bundle presents <code>mode: bootstrap</code></td><td><strong>Reject</strong> — bootstrap is valid only for the in-package snapshot</td></tr>
+              <tr><td>Downloaded archive has an unsafe member (absolute path, <code>..</code>, symlink / hardlink / device)</td><td><strong>Refuse</strong> the whole extract before writing anything; nothing is installed</td></tr>
+              <tr><td>Client state present but corrupt (rollback memory lost)</td><td>Mark <code>_corrupt</code> and <strong>refuse</strong> to advance state; assessor falls back to the in-package snapshot until explicit reinit</td></tr>
               <tr><td>Installed knowledge expired (stale / frozen)</td><td>Warn; stays trusted as the last-known-good floor, but a stale down-gate fact (<code>effect: mitigation</code>/<code>neutral</code>) no longer drives a conclusion — only <code>risk-increasing</code> facts keep driving</td></tr>
               <tr><td>Snapshot violates its own trust contract (schema / provenance-vs-registry / secret)</td><td><code>validate_snapshot</code> withholds trust → set untrusted (<code>needs_review</code>); refused at install time</td></tr>
               <tr><td>A verified pack only partially parses</td><td>Treat the whole set as inconsistent — never reason over the lines that happened to parse</td></tr>
@@ -256,12 +269,14 @@
           </table>
         </div>
         <p class="muted reveal" style="margin-top:1.5rem"><strong>Kill switch.</strong> A compromised
-          knowledge version can be revoked: publishing a revocation causes clients to disable that
-          version, roll back to the last verified snapshot, and mark findings assessed under it
-          <code>requires_reverification</code>. The revocation is itself attested exactly like a bundle, so
-          a forged revocation cannot become an attacker's rollback primitive — and it <em>re-observes</em>
-          affected findings rather than silently resolving them. This path is designed before it is
-          needed.</p>
+          knowledge version can be revoked. The single public revocation path
+          (<code>verify_and_apply_revocation</code>) attests the revocation record against the anchor exactly
+          like a bundle, records the revoked version(s), rolls the active snapshot back to the most recent
+          retained non-revoked one (or the in-package bootstrap when none remains), and marks findings
+          assessed under it <code>requires_reverification</code>. Because the internal caller-trusts-me apply
+          has no public entry point, a forged revocation cannot become an attacker's rollback primitive — and
+          it <em>re-observes</em> affected findings rather than silently resolving them. This path is designed
+          before it is needed.</p>
       </div>
     </section>
 

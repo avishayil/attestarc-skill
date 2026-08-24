@@ -8,5 +8,6 @@
   "cert_identity_regexp": "^https://github.com/avishayil/attestarc-skill/\\.github/workflows/release-knowledge\\.yml@.*$",
   "cert_oidc_issuer": "https://token.actions.githubusercontent.com",
   "bootstrap_manifest": "manifest.json",
-  "client_state_dir": "~/.attestarc/knowledge"
+  "client_state_dir": "~/.attestarc/state",
+  "snapshots_dir": "~/.attestarc/knowledge/snapshots"
 }

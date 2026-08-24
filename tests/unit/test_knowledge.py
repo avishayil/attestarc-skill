@@ -421,6 +421,43 @@ def test_allow_unverified_never_drives_conclusion(tmp_path, capsys):
 
 
 # --------------------------------------------------------------------------- #
+# resolve_active_snapshot — prefer a valid refreshed LKG over the bootstrap
+# --------------------------------------------------------------------------- #
+def test_resolve_active_snapshot_prefers_valid_lkg(tmp_path, monkeypatch):
+    lkg = str(tmp_path / "snapshots" / "v9")
+    _write_pack(lkg, "p.jsonl", [_entry(id="KE-a")])
+    with open(os.path.join(lkg, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump({"version": 9}, fh)
+    monkeypatch.setattr(knowledge.knowledge_verify, "load_anchor", lambda: {})
+    monkeypatch.setattr(knowledge.knowledge_verify, "load_client_state",
+                        lambda anchor: {"current": {"version": 9, "path": lkg}})
+    monkeypatch.setattr(knowledge.knowledge_verify, "state_is_corrupt",
+                        lambda s: False)
+    assert knowledge.resolve_active_snapshot() == lkg
+
+
+def test_resolve_active_snapshot_falls_back_to_bootstrap_when_corrupt(tmp_path,
+                                                                      monkeypatch):
+    lkg = str(tmp_path / "snapshots" / "v9")
+    _write_pack(lkg, "p.jsonl", [_entry(id="KE-a")])
+    monkeypatch.setattr(knowledge.knowledge_verify, "load_anchor", lambda: {})
+    monkeypatch.setattr(knowledge.knowledge_verify, "load_client_state",
+                        lambda anchor: {"current": {"path": lkg}, "_corrupt": True})
+    monkeypatch.setattr(knowledge.knowledge_verify, "state_is_corrupt",
+                        lambda s: True)
+    assert knowledge.resolve_active_snapshot() == knowledge._DEFAULT_KNOWLEDGE_ROOT
+
+
+def test_resolve_active_snapshot_ignores_missing_lkg_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(knowledge.knowledge_verify, "load_anchor", lambda: {})
+    monkeypatch.setattr(knowledge.knowledge_verify, "load_client_state",
+                        lambda anchor: {"current": {"path": str(tmp_path / "gone")}})
+    monkeypatch.setattr(knowledge.knowledge_verify, "state_is_corrupt",
+                        lambda s: False)
+    assert knowledge.resolve_active_snapshot() == knowledge._DEFAULT_KNOWLEDGE_ROOT
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 def test_cli_explain_returns_entry(tmp_path, capsys):

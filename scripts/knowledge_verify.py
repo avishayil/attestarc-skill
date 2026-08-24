@@ -41,10 +41,11 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from datetime import datetime, timezone
 
-from _pathsafe import resolve_within_root
+from _pathsafe import PathEscapeError, resolve_within_root, safe_extract_tar
 
 _PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DEFAULT_KNOWLEDGE_ROOT = os.path.join(_PACKAGE_ROOT, "knowledge")
@@ -122,7 +123,14 @@ def load_anchor(package_root=None) -> dict:
 
 
 def _expand_state_dir(anchor: dict) -> str:
-    raw = (anchor or {}).get("client_state_dir") or "~/.attestarc/knowledge"
+    raw = (anchor or {}).get("client_state_dir") or "~/.attestarc/state"
+    return os.path.abspath(os.path.expanduser(raw))
+
+
+def _expand_snapshots_dir(anchor: dict) -> str:
+    """Installed refreshed snapshots live here, SEPARATE from client state so a
+    corrupted snapshot cannot damage rollback memory and vice-versa."""
+    raw = (anchor or {}).get("snapshots_dir") or "~/.attestarc/knowledge/snapshots"
     return os.path.abspath(os.path.expanduser(raw))
 
 
@@ -130,29 +138,49 @@ def client_state_path(anchor: dict) -> str:
     return os.path.join(_expand_state_dir(anchor), _STATE_FILE)
 
 
+def _empty_state() -> dict:
+    return {"highest_version": 0, "current": None,
+            "revoked_versions": [], "history": []}
+
+
 def load_client_state(anchor: dict) -> dict:
     """Persistent last-known-good state, OUTSIDE any repo or bundle.
 
     The attacker cannot supply this; it is the client's own memory of the highest
-    version it has trusted and the digests it installed. Missing/unparseable state
-    degrades to a conservative empty floor (highest_version 0).
+    version it has trusted and the digests it installed. Two non-happy cases are
+    deliberately distinguished:
+
+    * **Missing** (no file) — a fresh machine. A conservative empty floor
+      (``highest_version`` 0) is legitimate; dynamic updates may proceed.
+    * **Present but corrupt/unparseable** — rollback memory is compromised (a
+      truncated write, or tampering to erase the high-water mark so an old
+      vulnerable version replays). Fail **closed**: return the empty floor marked
+      ``_corrupt`` so update/revocation paths refuse to advance and the assessor
+      falls back to the in-package bootstrap until an explicit reinit.
     """
     path = client_state_path(anchor)
-    empty = {"highest_version": 0, "current": None,
-             "revoked_versions": [], "history": []}
     if not os.path.exists(path):
-        return empty
+        return _empty_state()
     try:
         data = _load_json(path)
     except (OSError, json.JSONDecodeError):
-        return empty
+        corrupt = _empty_state()
+        corrupt["_corrupt"] = True
+        return corrupt
     if not isinstance(data, dict):
-        return empty
+        corrupt = _empty_state()
+        corrupt["_corrupt"] = True
+        return corrupt
     data.setdefault("highest_version", 0)
     data.setdefault("current", None)
     data.setdefault("revoked_versions", [])
     data.setdefault("history", [])
     return data
+
+
+def state_is_corrupt(state: dict) -> bool:
+    """True if client state was present but unusable (see :func:`load_client_state`)."""
+    return bool((state or {}).get("_corrupt"))
 
 
 def save_client_state(anchor: dict, state: dict) -> str:
@@ -434,16 +462,236 @@ def verify_download(bundle_dir, anchor=None, client_state=None, now=None,
             "checks": report.checks, "warnings": report.warnings}
 
 
-def apply_revocation(anchor, revoked_version, client_state=None) -> dict:
-    """Record a revocation in persistent client state (Updater path). Callers must
-    only invoke this for an *attested* revocation record (see the release workflow)."""
+# --------------------------------------------------------------------------- #
+# install — the ONLY path that advances client state (Updater)
+# --------------------------------------------------------------------------- #
+def _locate_bundle_root(extract_root: str) -> str:
+    """Find the directory holding manifest.json after a safe extraction — either
+    ``extract_root`` itself or a single top-level subdirectory (a common tar shape)."""
+    if os.path.exists(os.path.join(extract_root, _MANIFEST_FILE)):
+        return extract_root
+    subdirs = [os.path.join(extract_root, d) for d in sorted(os.listdir(extract_root))
+               if os.path.isdir(os.path.join(extract_root, d))]
+    if len(subdirs) == 1 and os.path.exists(os.path.join(subdirs[0], _MANIFEST_FILE)):
+        return subdirs[0]
+    raise ValueError("no manifest.json found in extracted bundle")
+
+
+def _copy_declared(bundle_dir: str, dest_dir: str, pack_names) -> None:
+    """Copy manifest.json and exactly the declared packs into ``dest_dir``,
+    refusing any path that escapes either root. Nothing else is copied."""
+    os.makedirs(dest_dir, exist_ok=True)
+    _, bundle_real, _ = resolve_within_root(bundle_dir, bundle_dir)
+    for rel in [_MANIFEST_FILE] + list(pack_names or []):
+        src = os.path.join(bundle_real, rel)
+        _, _, src_ok = resolve_within_root(src, bundle_real)
+        dst = os.path.join(dest_dir, rel)
+        _, _, dst_ok = resolve_within_root(dst, dest_dir)
+        if not (src_ok and dst_ok):
+            raise PathEscapeError(rel, dst, dest_dir)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(src, dst)
+
+
+def install(bundle, anchor=None, client_state=None, now=None,
+            offline_bundle=None, package_root=None) -> dict:
+    """Verify a downloaded bundle and, only on success, install it as the active
+    snapshot and advance client state. This is the ONLY path that advances the
+    high-water mark — verification alone never mutates state.
+
+    Steps: (safe-extract if ``bundle`` is an archive) → ``verify_download`` →
+    copy the declared packs into ``snapshots/vN.tmp`` → re-verify the staged bytes
+    against the manifest → atomically rename into ``snapshots/vN`` → atomically
+    advance client state (``highest_version``, ``current``, ``history``).
+
+    Fail-secure: any failure leaves the installed LKG and client state untouched
+    and returns ``action: discard``. A corrupt client state refuses install."""
+    if anchor is None:
+        anchor = load_anchor(package_root)
+    if client_state is None:
+        client_state = load_client_state(anchor)
+    report = _Report()
+
+    def refuse(reason):
+        report.warn(f"refusing install: {reason}")
+        return {"trusted": False, "action": "discard", "reason": reason,
+                "checks": report.checks, "warnings": report.warnings}
+
+    if state_is_corrupt(client_state):
+        return refuse("client state corrupt; refusing to advance (reinit required)")
+
+    staging = tempfile.mkdtemp(prefix="attestarc-install-")
+    try:
+        if os.path.isdir(bundle):
+            bundle_dir = bundle
+        else:
+            try:
+                extract_root = os.path.join(staging, "extract")
+                safe_extract_tar(bundle, extract_root)
+                bundle_dir = _locate_bundle_root(extract_root)
+            except (PathEscapeError, ValueError, OSError, tarfile.TarError) as exc:
+                return refuse(f"unsafe or unreadable archive: {exc}")
+
+        verified = verify_download(bundle_dir, anchor=anchor,
+                                   client_state=client_state, now=now,
+                                   offline_bundle=offline_bundle,
+                                   package_root=package_root)
+        for c in verified.get("checks", []):
+            report.checks.append(c)
+        if not verified.get("trusted"):
+            return refuse(verified.get("reason", "verification failed"))
+
+        version = verified["version"]
+        digest = verified["manifest_sha256"]
+        snaps = _expand_snapshots_dir(anchor)
+        os.makedirs(snaps, exist_ok=True)
+        final = os.path.join(snaps, f"v{version}")
+        _, _, within = resolve_within_root(final, snaps)
+        if not within:
+            return refuse("snapshot path escapes snapshots dir")
+        tmp_final = final + ".tmp"
+        if os.path.exists(tmp_final):
+            shutil.rmtree(tmp_final, ignore_errors=True)
+
+        try:
+            _copy_declared(bundle_dir, tmp_final, verified.get("packs"))
+            # Re-verify the STAGED copy against the (attested) manifest: the bytes
+            # we are about to install must themselves match, not just the source.
+            staged_manifest = _load_json(os.path.join(tmp_final, _MANIFEST_FILE))
+            _, staged_real, _ = resolve_within_root(tmp_final, tmp_final)
+            if not _verify_pack_integrity(staged_real, staged_manifest, report):
+                shutil.rmtree(tmp_final, ignore_errors=True)
+                return refuse("staged snapshot integrity mismatch")
+            if os.path.exists(final):
+                shutil.rmtree(final)
+            os.replace(tmp_final, final)
+        except (OSError, PathEscapeError, json.JSONDecodeError) as exc:
+            shutil.rmtree(tmp_final, ignore_errors=True)
+            return refuse(f"staging failed: {exc}")
+
+        # Advance client state atomically (single save of the fully-built state).
+        new_state = dict(client_state)
+        new_state["highest_version"] = max(
+            int(client_state.get("highest_version") or 0), int(version))
+        new_state["current"] = {"version": version, "manifest_sha256": digest,
+                                "verified_via": "attestation", "path": final}
+        history = [h for h in (client_state.get("history") or [])
+                   if h.get("version") != version]
+        history.append({"version": version, "manifest_sha256": digest, "path": final})
+        new_state["history"] = history
+        save_client_state(anchor, new_state)
+        report.check("state:advanced", True,
+                     f"highest_version={new_state['highest_version']}")
+        return {"trusted": True, "action": "installed", "version": version,
+                "manifest_sha256": digest, "snapshot_path": final,
+                "highest_version": new_state["highest_version"],
+                "checks": report.checks, "warnings": report.warnings}
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
+# Revocation — verify_and_apply_revocation is the ONLY public path
+# --------------------------------------------------------------------------- #
+_REVOCATION_TYPE = "attestarc-knowledge-revocation"
+
+
+def _validate_revocation(rec) -> list:
+    """Structural check of an (already attestation-verified) revocation record."""
+    if not isinstance(rec, dict):
+        return ["revocation is not a JSON object"]
+    errs = []
+    if rec.get("_type") != _REVOCATION_TYPE:
+        errs.append(f"_type must be {_REVOCATION_TYPE!r}")
+    rv = rec.get("revoked_versions")
+    if (not isinstance(rv, list) or not rv
+            or not all(isinstance(x, int) and not isinstance(x, bool) and x > 0
+                       for x in rv)):
+        errs.append("revoked_versions must be a non-empty list of positive integers")
+    return errs
+
+
+def _apply_revocation(anchor, revoked_versions, client_state=None,
+                      persist=True) -> dict:
+    """INTERNAL: record revoked version(s) in client state. Never call directly for
+    an unverified record — the only public entry is verify_and_apply_revocation."""
     if client_state is None:
         client_state = load_client_state(anchor)
     revs = set(client_state.get("revoked_versions") or [])
-    revs.add(revoked_version)
+    seq = revoked_versions if isinstance(revoked_versions, (list, tuple, set)) \
+        else [revoked_versions]
+    revs.update(seq)
     client_state["revoked_versions"] = sorted(revs)
-    save_client_state(anchor, client_state)
+    if persist:
+        save_client_state(anchor, client_state)
     return client_state
+
+
+def verify_and_apply_revocation(revocation_path, anchor=None, client_state=None,
+                                offline_bundle=None, package_root=None) -> dict:
+    """The ONLY public revocation path (kill switch, THREAT_MODEL §8).
+
+    Attestation-verify the revocation record against the anchor, structurally
+    validate it, record the revoked version(s), and roll ``current`` back to the
+    most recent retained non-revoked snapshot still on disk (or to the in-package
+    bootstrap when none remains). Findings assessed under a revoked version are
+    surfaced ``requires_reverification`` on the next assessor read (state.py
+    reverify re-observes; a knowledge change never auto-resolves a finding).
+
+    Fail-secure: an unattested, unreadable, or malformed revocation is discarded
+    and client state is left untouched. A corrupt client state refuses to apply."""
+    if anchor is None:
+        anchor = load_anchor(package_root)
+    if client_state is None:
+        client_state = load_client_state(anchor)
+    report = _Report()
+
+    def discard(reason):
+        report.warn(f"discarding revocation: {reason}")
+        return {"applied": False, "action": "discard", "reason": reason,
+                "checks": report.checks, "warnings": report.warnings}
+
+    if state_is_corrupt(client_state):
+        return discard("client state corrupt; refusing to apply (reinit required)")
+    try:
+        rec = _load_json(revocation_path)
+    except (OSError, json.JSONDecodeError) as exc:
+        return discard(f"revocation unreadable: {exc}")
+
+    att_ok, att_detail = _gh_attest_verify(revocation_path, anchor, offline_bundle)
+    report.check("attestation", att_ok, att_detail)
+    if not att_ok:
+        return discard(f"revocation attestation failed: {att_detail}")
+
+    errs = _validate_revocation(rec)
+    report.check("revocation:schema", not errs, "; ".join(errs) or "valid")
+    if errs:
+        return discard("revocation record invalid: " + "; ".join(errs))
+
+    new_state = _apply_revocation(anchor, rec["revoked_versions"],
+                                  dict(client_state), persist=False)
+    revoked = set(new_state["revoked_versions"])
+    cur = new_state.get("current") or {}
+    rolled_back_from = None
+    if cur.get("version") in revoked:
+        replacement = None
+        for h in reversed(new_state.get("history") or []):
+            if (h.get("version") not in revoked and h.get("path")
+                    and os.path.isdir(h["path"])):
+                replacement = {"version": h["version"],
+                               "manifest_sha256": h.get("manifest_sha256"),
+                               "verified_via": "attestation", "path": h["path"]}
+                break
+        rolled_back_from = cur.get("version")
+        new_state["current"] = replacement  # None => fall back to bootstrap
+    save_client_state(anchor, new_state)
+    report.check("state:revoked", True, f"revoked {sorted(revoked)}")
+    return {"applied": True, "action": "revoked",
+            "revoked_versions": sorted(revoked),
+            "rolled_back_from": rolled_back_from,
+            "current": new_state.get("current"),
+            "requires_reverification": True,
+            "checks": report.checks, "warnings": report.warnings}
 
 
 # --------------------------------------------------------------------------- #
@@ -462,6 +710,23 @@ def cmd_verify_download(args) -> int:
                              offline_bundle=args.bundle)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result.get("trusted") else 1
+
+
+def cmd_install(args) -> int:
+    """Updater-facing: verify a downloaded bundle and, on success, install it as
+    the active snapshot and advance client state (the only state-advancing path)."""
+    result = install(bundle=args.bundle_path, now=args.now,
+                     offline_bundle=args.bundle)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("trusted") else 1
+
+
+def cmd_verify_and_apply_revocation(args) -> int:
+    """Updater-facing: attestation-verify a revocation record and apply it."""
+    result = verify_and_apply_revocation(revocation_path=args.revocation_path,
+                                         offline_bundle=args.bundle)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("applied") else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -483,6 +748,24 @@ def build_parser() -> argparse.ArgumentParser:
                     help="offline Sigstore bundle for air-gapped verification")
     sp.add_argument("--now", default=None, help="ISO timestamp for freshness (testing)")
     sp.set_defaults(func=cmd_verify_download)
+
+    sp = sub.add_parser("install",
+                        help="verify a downloaded bundle and install it as the "
+                             "active snapshot, advancing client state (Updater path)")
+    sp.add_argument("bundle_path",
+                    help="downloaded bundle: a directory of manifest+packs or a .tar.gz")
+    sp.add_argument("--bundle", default=None,
+                    help="offline Sigstore bundle for air-gapped verification")
+    sp.add_argument("--now", default=None, help="ISO timestamp for freshness (testing)")
+    sp.set_defaults(func=cmd_install)
+
+    sp = sub.add_parser("verify-and-apply-revocation",
+                        help="attestation-verify a revocation record and apply it "
+                             "(kill switch; Updater path)")
+    sp.add_argument("revocation_path", help="path to the signed revocation record")
+    sp.add_argument("--bundle", default=None,
+                    help="offline Sigstore bundle for air-gapped verification")
+    sp.set_defaults(func=cmd_verify_and_apply_revocation)
     return p
 
 

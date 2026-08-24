@@ -15,6 +15,8 @@ a root. Callers decide how to react (refuse a write, skip a read, degrade to
 from __future__ import annotations
 
 import os
+import shutil
+import tarfile
 
 
 def resolve_within_root(path: str, root: str) -> tuple[str, str, bool]:
@@ -74,3 +76,53 @@ def safe_read_text(path: str, root: str, encoding: str = "utf-8") -> str:
         raise PathEscapeError(path, resolved, root_real)
     with open(path, "r", encoding=encoding) as fh:
         return fh.read()
+
+
+def safe_extract_tar(tar_path: str, dest_dir: str) -> list[str]:
+    """Extract a tar archive into ``dest_dir``, refusing every unsafe member.
+
+    A downloaded knowledge bundle is untrusted supply-chain input. Each member
+    MUST be a regular file or directory whose resolved path stays strictly within
+    ``dest_dir``. Absolute paths, ``..`` traversal, and every non-regular member
+    (symlink, hardlink, device, fifo) are refused *before anything is written* —
+    so a malicious archive can neither escape the staging dir nor plant a link a
+    later member follows out of it. Extraction is done member-by-member with our
+    own IO (never :meth:`tarfile.extractall`), so tarfile's own path handling is
+    not on the trust path.
+
+    Raises :class:`PathEscapeError` (containment) or :class:`ValueError` (unsafe
+    member kind / unreadable) on any violation; otherwise returns the list of
+    extracted file paths relative to ``dest_dir``.
+    """
+    dest_real = os.path.normpath(os.path.realpath(dest_dir))
+    os.makedirs(dest_real, exist_ok=True)
+    written: list[str] = []
+    with tarfile.open(tar_path, "r:*") as tf:
+        members = tf.getmembers()
+        # First pass: validate every member. Nothing is written until all pass.
+        for m in members:
+            name = m.name
+            if os.path.isabs(name) or name.startswith(("/", "\\")):
+                raise ValueError(f"absolute path in tar member: {name!r}")
+            if not (m.isfile() or m.isdir()):
+                raise ValueError(
+                    f"unsafe tar member (not a regular file or directory): {name!r}")
+            resolved, root_real, within = resolve_within_root(
+                os.path.join(dest_real, name), dest_real)
+            if not within:
+                raise PathEscapeError(name, resolved, root_real)
+        # Second pass: extract with our own IO now that all members are safe.
+        for m in members:
+            resolved, _, _ = resolve_within_root(
+                os.path.join(dest_real, m.name), dest_real)
+            if m.isdir():
+                os.makedirs(resolved, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(resolved), exist_ok=True)
+            src = tf.extractfile(m)
+            if src is None:
+                raise ValueError(f"unreadable tar member: {m.name!r}")
+            with src, open(resolved, "wb") as out:
+                shutil.copyfileobj(src, out)
+            written.append(os.path.relpath(resolved, dest_real))
+    return written

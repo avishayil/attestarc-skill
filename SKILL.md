@@ -175,17 +175,37 @@ ingestion" below). The shipped refresh is a narrow **download → verify → ins
 2. **Verify** it against the external `trust-anchor.json` — shells out to
    `gh attestation verify` for the pinned repo/workflow/issuer identity, then checks
    manifest pack integrity, freshness, monotonic version vs persistent client state
-   (`~/.attestarc/knowledge/trusted-state.json`), `prev_digest` chaining, and
+   (`~/.attestarc/state/trusted-state.json`), `prev_digest` chaining, and
    revocation. **Any failure discards the download**; the installed last-known-good
-   is retained and independently verified.
+   is retained and independently verified. `verify-download` is a pure fact check —
+   it decides whether the bundle *should* be installed and mutates nothing:
 
    ```bash
    python "$ATTESTARC/scripts/knowledge_verify.py" verify-download "$DOWNLOAD_DIR"
    ```
 
-3. **Install** the verified bundle atomically into `~/.attestarc/knowledge/` and
-   record the new version+digest in client state, so the assessor's `verify` trusts
-   it thereafter.
+3. **Install** — `install` is the ONLY path that advances client state. It
+   safe-extracts an archive bundle (refusing absolute paths, `..`, and
+   symlink/hardlink members), re-runs verification, re-verifies the staged bytes,
+   atomically renames the snapshot into `~/.attestarc/knowledge/snapshots/vN`, then
+   atomically records the new version+digest in client state — so the assessor's
+   `verify` trusts it thereafter. Client state and snapshot material live in separate
+   directories; a corrupt (not merely absent) client-state file fails closed and
+   `install` refuses to advance until an explicit reinit.
+
+   ```bash
+   python "$ATTESTARC/scripts/knowledge_verify.py" install "$DOWNLOAD_DIR"   # dir or .tar.gz
+   ```
+
+To retire a compromised version, the Updater applies an **attested revocation** —
+the only public revocation path. It verifies the record against the anchor exactly
+like a bundle, records the revoked version(s), and rolls the active snapshot back to
+the most recent retained non-revoked one (findings assessed under it then surface
+`requires_reverification`):
+
+```bash
+python "$ATTESTARC/scripts/knowledge_verify.py" verify-and-apply-revocation "$REVOCATION_JSON"
+```
 
 The Updater never opens the assessed repository, never writes the kernel, and — even
 upstream — cannot itself promote a claim to trusted: **the model may propose, only

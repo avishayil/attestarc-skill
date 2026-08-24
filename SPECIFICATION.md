@@ -985,21 +985,45 @@ issuer) an official bundle must have been produced under. A bundle can therefore
 never declare its own trust, and the in-package snapshot is bootstrap-trusted ONLY
 because it rode in on the attested skill release. Upstream CI attests
 `knowledge/manifest.json` (version, expiry, `prev_digest`, per-pack `{sha256,size}`)
-with GitHub Artifact Attestations. `scripts/knowledge_verify.py` provides two entry
-points: `verify_download` (Updater; runs `gh attestation verify` against the anchor
-identity, then checks manifest pack integrity, freshness/anti-freeze, monotonic
-version vs persistent client state, `prev_digest` chaining, and revocation — **any
-failure discards the download and retains the installed last-known-good**) and
-`verify_installed` (Assessor; no network or `gh`, trusts the in-package snapshot as
-bootstrap or a refreshed snapshot only if client state records its exact
-version+digest was attested). A downloaded bundle declaring `mode: bootstrap` is
-rejected. Attestation verification shells out to `gh attestation verify` (no Python
-crypto dependency; mirrors the `ssh-keygen` convention). Trust is
-identity-constrained by construction: a valid attestation for another repo/workflow
-does not satisfy the anchor. A compromised version SHALL be revocable via a kill
-switch (`THREAT_MODEL.md` §8): the revocation is itself attested; clients verify it,
-disable the version, roll back to the last verified snapshot, and mark findings
-assessed under it `requires_reverification`.
+with GitHub Artifact Attestations. `scripts/knowledge_verify.py` provides the
+verification and lifecycle entry points: `verify_download` (Updater; runs
+`gh attestation verify` against the anchor identity, then checks manifest pack
+integrity, freshness/anti-freeze, monotonic version vs persistent client state,
+`prev_digest` chaining, and revocation — **any failure discards the download and
+retains the installed last-known-good**) and `verify_installed` (Assessor; no
+network or `gh`, trusts the in-package snapshot as bootstrap or a refreshed snapshot
+only if client state records its exact version+digest was attested). A downloaded
+bundle declaring `mode: bootstrap` is rejected. Attestation verification shells out
+to `gh attestation verify` (no Python crypto dependency; mirrors the `ssh-keygen`
+convention). Trust is identity-constrained by construction: a valid attestation for
+another repo/workflow does not satisfy the anchor.
+
+`verify_download` is a pure fact operation and mutates nothing; advancing the
+high-water mark and installing a snapshot SHALL be done only by `install` (the
+single state-advancing path). `install` SHALL: safe-extract an archive bundle
+(`_pathsafe.safe_extract_tar` — refusing absolute paths, `..` traversal, and every
+non-regular member before writing anything, extracting member-by-member with its own
+IO rather than `tarfile.extractall`); run `verify_download`; on success copy only the
+manifest and declared packs into a staging snapshot, re-verify the staged bytes
+against the attested manifest, atomically rename it into
+`~/.attestarc/knowledge/snapshots/vN`, and atomically advance client state
+(`highest_version`, `current`, `history`). Client state
+(`~/.attestarc/state/trusted-state.json`) and installed snapshots
+(`~/.attestarc/knowledge/snapshots/`) SHALL live in separate directories.
+`load_client_state` SHALL distinguish an **absent** state file (fresh machine; empty
+floor is legitimate) from a **present-but-corrupt** one (rollback memory lost or
+tampered): a corrupt state is marked `_corrupt` and `install` /
+`verify_and_apply_revocation` SHALL refuse to advance until an explicit reinit, with
+the Assessor falling back to the in-package snapshot.
+
+A compromised version SHALL be revocable via a kill switch (`THREAT_MODEL.md` §8).
+`verify_and_apply_revocation` SHALL be the ONLY public revocation path: it
+attestation-verifies the revocation record against the anchor (an unattested,
+unreadable, or malformed record is discarded and client state left untouched),
+records the revoked version(s), and rolls `current` back to the most recent retained
+non-revoked snapshot still on disk (or to the in-package bootstrap when none
+remains), marking findings assessed under it `requires_reverification`. The internal
+`_apply_revocation` (which trusts its caller) SHALL have no public entry point.
 
 A matching attested pack hash establishes byte integrity but NOT policy
 conformance. Before a snapshot is trusted for reasoning it SHALL additionally pass

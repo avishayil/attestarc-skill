@@ -109,14 +109,27 @@ verify_download  (Updater; network/gh)          verify_installed (Assessor; no n
   ANY failure → DISCARD the download (keep LKG)
 ```
 
+`verify_download` decides *whether* a bundle may be installed and mutates nothing.
+Actually installing it and advancing the high-water mark is done by exactly one
+path — `knowledge_verify.py install` — which **safe-extracts** an archive (refusing
+absolute paths, `..`, and symlink/hardlink members before writing anything),
+re-verifies the staged bytes, atomically renames the snapshot into place, and only
+then atomically advances client state. Rollback memory (`~/.attestarc/state/`) and
+installed snapshots (`~/.attestarc/knowledge/snapshots/`) live in separate
+directories, and a *corrupt* (not merely absent) client-state file fails closed:
+the Updater refuses to advance and the assessor falls back to the in-package
+snapshot until an explicit reinit.
+
 This defends against knowledge tampering, rollback to vulnerable knowledge, a
 freeze on a stale version, a forged bundle, mix-and-match of files, and a
 malicious mirror. Trust is **identity-constrained**: a valid attestation for some
 *other* repo/workflow does not satisfy the anchor. Anti-rollback is judged against
-the client's own persistent memory (`~/.attestarc/knowledge/trusted-state.json`),
+the client's own persistent memory (`~/.attestarc/state/trusted-state.json`),
 never a value inside the bundle. A compromised version can be revoked via an
-**attested kill switch** ([`THREAT_MODEL.md`](THREAT_MODEL.md) §8), which
-re-observes affected findings rather than silently resolving them.
+**attested kill switch** ([`THREAT_MODEL.md`](THREAT_MODEL.md) §8): the single
+public path attestation-verifies the revocation record against the anchor, rolls
+the active snapshot back to the last retained non-revoked one, and re-observes
+affected findings rather than silently resolving them.
 
 ### Core invariants
 

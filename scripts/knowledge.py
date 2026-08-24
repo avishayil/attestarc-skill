@@ -411,6 +411,30 @@ def build_index(entries) -> dict:
     return index
 
 
+def resolve_active_snapshot() -> str:
+    """The knowledge root the assessor should read when none is given explicitly.
+
+    Prefer a refreshed last-known-good snapshot: if persistent client state records
+    a ``current`` snapshot that still exists on disk (and state is not corrupt),
+    use it — ``verify_installed`` re-checks it against that same client-state
+    attestation record before anything drives a conclusion. Otherwise fall back to
+    the in-package bootstrap. Never raises; any error degrades to the bootstrap.
+    """
+    try:
+        anchor = knowledge_verify.load_anchor()
+        state = knowledge_verify.load_client_state(anchor)
+        if knowledge_verify.state_is_corrupt(state):
+            return _DEFAULT_KNOWLEDGE_ROOT
+        cur = state.get("current") or {}
+        path = cur.get("path")
+        if (path and os.path.isdir(path)
+                and os.path.exists(os.path.join(path, "manifest.json"))):
+            return path
+    except Exception:  # noqa: BLE001 — bootstrap is always a safe fallback
+        pass
+    return _DEFAULT_KNOWLEDGE_ROOT
+
+
 def open_verified(knowledge_root=None, now=None):
     """The assessor-facing read path. Verify the snapshot BEFORE any entry can be
     returned as conclusion-driving, and validate the set is consistent.
@@ -422,7 +446,7 @@ def open_verified(knowledge_root=None, now=None):
     This is the only path the assessor should use; ``load_packs`` is raw and is
     reserved for tests and the compiler.
     """
-    root = knowledge_root or _DEFAULT_KNOWLEDGE_ROOT
+    root = knowledge_root or resolve_active_snapshot()
     verification = knowledge_verify.verify_installed(knowledge_root=root, now=now)
     entries, summaries = load_packs(os.path.abspath(root))
     consistency = check_consistency(entries)
@@ -464,7 +488,7 @@ def open_verified(knowledge_root=None, now=None):
 # Commands
 # --------------------------------------------------------------------------- #
 def _resolve_root(args) -> str:
-    root = args.knowledge_root or _DEFAULT_KNOWLEDGE_ROOT
+    root = args.knowledge_root or resolve_active_snapshot()
     if not os.path.isdir(root):
         raise KnowledgeError(f"knowledge root not found: {root}")
     return os.path.abspath(root)
