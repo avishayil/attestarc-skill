@@ -336,7 +336,7 @@ def validate_snapshot(entries, registry) -> dict:
     for e in entries:
         eid = e.get("id")
         pub = _public(e)
-        for key in kc._REQUIRED:
+        for key in kc._VERIFIED_REQUIRED:
             if key not in pub:
                 violations.append({"kind": "missing-field", "id": eid,
                                    "field": key})

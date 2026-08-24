@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://attestarc.dev/schemas/knowledge-candidate-1.json",
+  "title": "AttestArc candidate knowledge entry",
+  "description": "The shape the MODEL produces during knowledge-refresh ingestion — a PROPOSAL, never a trusted entry. It deliberately OMITS the trusted 'status' and 'confidence' fields of schemas/knowledge.schema.json: those are ASSIGNED by deterministic promotion (knowledge_compile.promote_to_verified), never declared by the model. A candidate carrying 'status' or 'confidence' is rejected structurally by validate_candidate. Each source carries only a 'url' plus a provenance binding (a resolvable quarantine 'receipt_id'); the source registry — not the candidate — derives publisher/type/authority. Candidate knowledge MAY shape investigation questions but MUST NOT drive a security conclusion until promotion emits a VerifiedKnowledgeEntry (schemas/knowledge.schema.json). Secret values MUST NOT appear anywhere. Stable objects are closed (additionalProperties:false); host-specific data goes in the open 'extensions' object.",
+  "type": "object",
+  "required": ["id", "kind", "platform", "subject", "claim", "valid_from", "sources"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^KE-[a-z0-9-]+$",
+      "description": "Proposed stable knowledge-entry id, e.g. KE-gha-prt-checkout-default."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["platform-semantics", "api", "standard", "guidance"],
+      "description": "'platform-semantics': how a platform behaves; 'api': endpoint shape/response meaning; 'standard': an external spec; 'guidance': recommended practice."
+    },
+    "platform": {
+      "type": "string",
+      "description": "The platform or ecosystem the claim is about, e.g. github-actions, github, oidc, slsa, openssf."
+    },
+    "subject": {
+      "type": "string",
+      "description": "Short topic slug the claim is about, e.g. pull_request_target, cache-write, oidc-subject."
+    },
+    "claim_key": {
+      "type": "string",
+      "description": "Optional single-valued slot key for contradiction detection (see knowledge.schema.json)."
+    },
+    "claim": {
+      "type": "string",
+      "description": "The fact, stated plainly and testably. NOT a verdict about any repository. Contains no secret values."
+    },
+    "applies_to": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Scope conditions under which the claim holds. Absent fields mean 'any'.",
+      "properties": {
+        "product": { "type": "string" },
+        "events": { "type": "array", "items": { "type": "string" } },
+        "action": { "type": "string" },
+        "version": { "type": "string" },
+        "extensions": { "$ref": "#/definitions/extensions" }
+      }
+    },
+    "valid_from": {
+      "type": "string",
+      "format": "date",
+      "description": "Date from which the claim is known to hold (platform-change date or first-observed date)."
+    },
+    "expires": {
+      "type": "string",
+      "format": "date",
+      "description": "Optional date after which the claim must be re-verified."
+    },
+    "effect": {
+      "type": "string",
+      "enum": ["mitigation", "risk-increasing", "neutral"],
+      "description": "The direction the claim moves an assessment (see knowledge.schema.json). Read by the promotion policy as a conservative security-regression signal: a 'mitigation' proposal is treated as security-negative and routes to review, never auto-promote."
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/candidate-source" },
+      "description": "Provenance. At least one source is required. publisher/type/authority are NOT declared here — they are DERIVED from the URL by the source registry during validation."
+    },
+    "supersedes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ids of entries this candidate PROPOSES to replace. A proposal hint only — it confers no trust and never fast-tracks promotion; any supersession routes to review."
+    },
+    "compiler": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Provenance of the extraction that produced this candidate.",
+      "properties": {
+        "version": { "type": "string" },
+        "extensions": { "$ref": "#/definitions/extensions" }
+      }
+    },
+    "extensions": { "$ref": "#/definitions/extensions" }
+  },
+  "definitions": {
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Open namespace for host- or tool-specific data. Secret values MUST NOT appear here."
+    },
+    "candidate-source": {
+      "type": "object",
+      "required": ["url"],
+      "additionalProperties": false,
+      "description": "One proposed provenance record. The model supplies only the 'url' and a binding to a fetched object via 'receipt_id' (a quarantine receipt from knowledge_compile.py, which carries the registry-derived publisher/type/authority and the self-verified content_hash). publisher/type/authority MUST NOT be declared here — they are derived and any declared value that disagrees with the registry classification is an error.",
+      "properties": {
+        "url": { "type": "string" },
+        "receipt_id": { "type": "string", "description": "Id of a quarantine receipt resolvable in the quarantine dir; the required provenance binding for a promotion-eligible source." },
+        "retrieved_at": { "type": "string", "description": "Optional; the authoritative value comes from the resolved receipt." },
+        "content_hash": { "type": "string", "description": "Optional; the authoritative value comes from the resolved (self-verified) receipt." },
+        "extensions": { "$ref": "#/definitions/extensions" }
+      }
+    }
+  }
+}

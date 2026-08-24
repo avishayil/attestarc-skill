@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://attestarc.dev/schemas/knowledge-1.json",
-  "title": "AttestArc knowledge entry",
-  "description": "A single temporal, provenance-backed platform-knowledge claim. Knowledge packs are JSONL files (one entry per line) under knowledge/. An entry is trusted for reasoning ONLY after it passes the verification chain (scripts/knowledge_verify.py) AND its confidence is not 'candidate'. Candidate entries may shape investigation questions but MUST NOT drive a security conclusion. Secret values MUST NOT appear anywhere. Stable objects are closed (additionalProperties:false); host-specific data goes in the open 'extensions' object.",
+  "title": "AttestArc verified knowledge entry",
+  "description": "A single temporal, provenance-backed platform-knowledge claim — the VERIFIED (trusted) shape. This is what deterministic promotion (knowledge_compile.promote_to_verified) EMITS and what a released snapshot contains; the model never produces it directly. The model produces the candidate shape (schemas/knowledge-candidate.schema.json), which omits the trusted 'status'/'confidence' fields and the per-source publisher/type/authority; promotion assigns them. Knowledge packs are JSONL files (one entry per line) under knowledge/. An entry is trusted for reasoning ONLY after it passes the verification chain (scripts/knowledge_verify.py) AND its confidence is not 'candidate'. Secret values MUST NOT appear anywhere. Stable objects are closed (additionalProperties:false); host-specific data goes in the open 'extensions' object.",
   "type": "object",
   "required": ["id", "kind", "platform", "subject", "claim", "valid_from", "status", "confidence", "sources"],
   "additionalProperties": false,

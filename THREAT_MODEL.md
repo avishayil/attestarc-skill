@@ -207,26 +207,52 @@ reasonable."
 Promotion from candidate to verified is **deterministic** (`core/promotion-policy.md`).
 The LLM may *propose*; it may never `promote()`.
 
-- **Auto-promote** — authoritative vendor doc/changelog + structured claim +
-  provenance bound to a quarantined object + no conflict + no supersede of an
-  active claim + evals pass + not a security-*negative* change.
-- **Require review (PR)** — changes reachability/severity semantics, or is
-  security-negative (i.e. previously-vulnerable becomes "safe" — the exact shape a
-  poisoning attempt takes).
+The model produces a **candidate** (`schemas/knowledge-candidate.schema.json`) that
+**omits** the trusted `status`/`confidence` fields and never declares a source's
+`publisher`/`type`/`authority` — a candidate carrying `status`/`confidence` is a
+structural error. Only deterministic promotion (`promote_to_verified`, gated by an
+auto-promote tier) emits a verified entry (`schemas/knowledge.schema.json`),
+assigning `status: active`, deriving `confidence` from source authority, and copying
+provenance from the self-verified quarantine receipt. `may_promote` is fed the
+validation-result object and **refuses to run** on an unvalidated candidate;
+`evaluate_candidate` is the single unskippable orchestrator (validate → conflict →
+semantic diff → direction → may-promote).
+
+- **Auto-promote** — validated candidate + authoritative source (derived authority
+  ≥ 90) bound to a **resolvable, self-verifying** quarantine receipt + no conflict +
+  does not modify or supersede an active claim + a non-negative/non-uncertain
+  **derived** direction + a passing **eval-result artifact** + (for published packs)
+  no failed attestation.
+- **Require review (PR)** — supersedes, conflicts with, or otherwise **modifies an
+  existing active claim** (an additive edit of an active entry routes to review even
+  without `supersedes`), or the derived direction is security-**negative** or
+  **uncertain** (previously-vulnerable becomes "safe", or a change we cannot prove is
+  safe — the exact shape a poisoning attempt takes), or the eval-result artifact is
+  missing/failing.
 - **Two-party review** — changes to root-of-trust files: `core/agent-safety.md`,
   `core/promotion-policy.md`, `scripts/knowledge_verify.py`, `scripts/knowledge.py`,
   `scripts/knowledge_compile.py`, `scripts/_pathsafe.py` (the containment +
   safe-extract helper the install path trusts against untrusted archives),
   `knowledge/sources.yaml`,
-  `knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json`,
-  `schemas/learning-candidate.schema.json`, `.github/workflows/release-knowledge.yml`,
-  or **any weakening/deletion of a trusted eval**.
+  `knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json` (including the
+  candidate schema), `schemas/learning-candidate.schema.json`,
+  `.github/workflows/release-knowledge.yml`, or **any weakening/deletion of a
+  trusted eval**.
 - **Never auto-promote** — blog / issue / researcher post / model inference →
   candidate only.
 
 Authority is assigned by the source registry (`knowledge/sources.yaml`), never by
-the model. The eval corpus is itself root-of-trust: a candidate MAY *add* paired
-find/refuse evals but MUST NOT weaken or delete trusted evals in the same trust step.
+the model, and URL paths are dot-segment-normalized before prefix matching (a
+`/actions/../evil` cannot smuggle a trusted org prefix). Conflict and semantic diff
+are computed against an **immutable baseline** (the last verified released snapshot),
+never the working tree that carries the proposal. The security direction is
+**derived** from the candidate's `effect` and its baseline diff, never read from a
+model-controlled field. Content-promotion eligibility is separate from distribution
+trust: a *missing* attestation (`None`) means "not attested yet" and never reads as
+valid, but does not by itself block content promotion; only a genuine **failed**
+attestation over a published pack blocks. The eval corpus is itself root-of-trust: a
+candidate MAY *add* paired find/refuse evals but MUST NOT weaken or delete trusted
+evals in the same trust step.
 
 ## 7. Findings, provenance, and invalidation
 
@@ -281,13 +307,36 @@ and the security page.
 - **Verified-LKG (last-known-good)** — a refreshed snapshot that is trusted only
   because persistent client state records that its exact version + manifest digest
   was attestation-verified. The retained LKG is what fail-secure falls back to.
-- **Quarantine receipt (`QR-…`)** — a record binding an upstream fetched document
-  (stored by content hash) to its registry-derived provenance. Candidate knowledge
+- **Candidate entry** — the untrusted shape the model produces
+  (`schemas/knowledge-candidate.schema.json`): the same fields as a verified entry
+  **minus** the trusted `status`/`confidence` and minus any model-declared source
+  `publisher`/`type`/`authority`. Those are assigned by deterministic promotion; a
+  candidate carrying them is rejected structurally.
+- **Quarantine receipt (`QR-…`)** — a **self-verifying** record binding an upstream
+  fetched document (stored by content hash) to its registry-derived provenance. The
+  receipt id is the full sha256 of the stored bytes; resolving a receipt re-hashes
+  the stored `.raw` and re-classifies its `final_url`, so a fabricated receipt whose
+  bytes do not rehash (or whose URL no longer classifies) does not resolve. It
+  records `requested_url`/`final_url`/`redirect_chain`; a cross-origin redirect off
+  the final origin is marked not-allowed. A promotion-eligible source MUST carry a
+  resolvable receipt (an inline hash alone is insufficient). Candidate knowledge
   references a receipt; the document is inert data, never instructions.
 - **Derived authority** — a source's authority integer, obtained by reclassifying
-  its URL through the identity-scoped source registry (`knowledge/sources.yaml`),
-  never taken from a candidate's self-declaration. A candidate whose declared
-  authority/publisher/type disagrees with the derived values is rejected.
+  its URL through the identity-scoped source registry (`knowledge/sources.yaml`,
+  dot-segment-normalized before prefix matching), never taken from a candidate's
+  self-declaration. A candidate whose declared authority/publisher/type disagrees
+  with the derived values is rejected.
+- **Immutable baseline** — the last verified released snapshot, against which
+  conflict and semantic diff are computed. Never the working tree that carries the
+  proposal, so a proposal cannot launder itself by editing what it is compared to.
+- **Derived direction** — a conservative security-regression signal computed from
+  the candidate's `effect` and its baseline semantic diff, never read from a
+  model-controlled field. A new `mitigation`, or a modification moving an active
+  `risk-increasing` claim toward `mitigation`/`neutral`, is **negative**; any other
+  modification of an active semantic is **uncertain**; both route to review.
+- **Eval-result artifact** — the small JSON the eval step emits (`{"passed": …,
+  "corpus_sha": …, "cases": N}`) that the promotion policy consumes. Absent or
+  `passed: false` fails closed (blocks auto-promote).
 - **`requires_reverification`** — a read-time view surfaced on a finding whose
   knowledge dependency was superseded or revoked. The stored status is never
   silently mutated and a knowledge change never auto-resolves a finding; the

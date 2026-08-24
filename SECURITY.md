@@ -64,7 +64,8 @@ root-of-trust files).
 │   → drives a conclusion ONLY after the verification chain passes       │
 ├──────────────────────────────────────────────────────────────────────┤
 │ CANDIDATE KNOWLEDGE — untrusted                                        │
-│   LLM extractions, web/changelog deltas, researcher & user claims      │
+│   LLM extractions (candidate schema: no status/confidence/authority),  │
+│   web/changelog deltas, researcher & user claims                       │
 │   → MAY shape which questions are asked; MUST NOT change a conclusion  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -154,7 +155,15 @@ affected findings rather than silently resolving them.
 - **Verified drives, candidate only asks** — only verified knowledge may drive a
   conclusion; candidate knowledge may raise an investigation question but never
   closes a chain; a read that skips the verify-gate can surface facts but never
-  drives one.
+  drives one. The model produces only a *candidate* (no `status`/`confidence`, no
+  self-declared source authority); a **deterministic** policy assigns those and
+  promotes. Promotion demands a **self-verifying** quarantine receipt (stored bytes
+  re-hash to the receipt id; cross-origin redirects rejected), computes conflict and
+  a semantic diff against the **immutable** last-released snapshot (never the working
+  tree), **derives** the security direction (a lowering or uncertain change routes to
+  review — never read from a model field), and consumes a passing **eval-result
+  artifact** (missing → fail closed). An additive edit of an active entry routes to
+  review even without an explicit supersede.
 - **Secrets stay out** — secret values are never persisted to `findings.json` —
   not even as a hash (a low-entropy secret is recoverable from its sha256, so a
   secret-like injection attempt is recorded with the hash withheld) — and secrets or

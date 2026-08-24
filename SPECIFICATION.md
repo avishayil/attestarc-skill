@@ -968,6 +968,11 @@ the registry — never model-chosen), `type`, `url`, `retrieved_at`,
 default `neutral` when absent — the direction the claim moves an assessment, read by
 the freshness gate in §23.3). Stable objects SHALL set `additionalProperties: false`
 with an explicit `extensions` escape hatch, mirroring the findings schema (§6.2).
+This is the **verified** shape. The model does not produce it directly: it produces a
+**candidate** (`schemas/knowledge-candidate.schema.json`), the same shape MINUS the
+trusted `status`/`confidence` and MINUS any per-source `publisher`/`type`/`authority`.
+Those trusted fields are ASSIGNED by deterministic promotion (§24.2); a candidate
+that declares them is rejected.
 
 ### 23.2 Temporality
 
@@ -1091,21 +1096,46 @@ shipped in the payload.
 ### 24.2 Promotion policy
 
 Promotion from candidate to verified is **deterministic** (`core/promotion-policy.md`);
-the LLM may propose but never promote. Every promotion fact is **derived**, not
-asserted by the caller: authority/type/publisher come from reclassifying the
-candidate's source URLs through the registry, conflict from the current verified
-set, and root-of-trust/eval-weakening from a path classifier over the proposed
-diff. Tiers: **auto-promote** (authoritative vendor doc/changelog + structured
-claim + provenance bound to a quarantined object + no conflict + does not supersede
-an active claim + evals pass + not security-negative); **require review** (supersedes
-or conflicts with an active claim, changes reachability or severity semantics, or
-any security-*negative* change where previously-vulnerable becomes "safe");
+the LLM may propose but never promote. The model produces a **candidate**
+(`schemas/knowledge-candidate.schema.json`) that OMITS the trusted `status`/
+`confidence` fields and any per-source `publisher`/`type`/`authority`; a candidate
+carrying them is a structural error (`validate_candidate`). Only
+`promote_to_verified` — deterministic, gated by an auto-promote tier — emits a
+verified entry (§23.1), assigning `status: active`, deriving `confidence` from source
+authority (`corroborated` when ≥ 2 independent authoritative origins agree, else
+`authoritative`), and copying provenance from the self-verified receipt.
+`evaluate_candidate` is the single unskippable orchestrator (validate → conflict →
+semantic diff → direction → may-promote), and `may_promote` refuses to run on an
+unvalidated candidate.
+
+Every promotion fact is **derived**, not asserted by the caller: authority/type/
+publisher come from reclassifying the candidate's source URLs through the registry
+(URL paths dot-segment-normalized before prefix matching); conflict and a
+**semantic diff** (`added` vs `modified`) are computed against an **immutable
+baseline** (the last verified released snapshot, never the working tree); the
+security **direction** is derived from `effect` + that diff (never a model field);
+and root-of-trust/eval-weakening come from a path classifier over the proposed diff.
+Each promotion-eligible source SHALL be bound to a **resolvable, self-verifying**
+quarantine receipt (its stored `.raw` re-hashes to the receipt id and its `final_url`
+re-classifies to the same authority; an inline `content_hash` alone is insufficient;
+a cross-origin redirect off the final origin is rejected). Tiers: **auto-promote**
+(validated candidate + authoritative source bound to a self-verifying receipt + no
+conflict + does not modify or supersede an active claim + non-negative/non-uncertain
+derived direction + a passing **eval-result artifact** + no failed attestation over a
+published pack); **require review** (supersedes, conflicts with, or otherwise modifies
+an active claim — an additive edit routes here even without `supersedes` — or a
+security-*negative*/*uncertain* direction, or a missing/failing eval-result);
 **two-party review** (root-of-trust files: `core/agent-safety.md`,
 `core/promotion-policy.md`, `scripts/knowledge_verify.py`, `scripts/knowledge.py`,
-`scripts/knowledge_compile.py`, `knowledge/sources.yaml`, `knowledge/trust-anchor.json`,
-`schemas/knowledge*.schema.json`, the release workflow, or any eval weakening/
-deletion); **never auto-promote** (blog/issue/researcher/model inference → candidate
-only). Authority is assigned by `knowledge/sources.yaml`, never by the model.
+`scripts/knowledge_compile.py`, `scripts/_pathsafe.py`, `knowledge/sources.yaml`,
+`knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json` (including the
+candidate schema), `schemas/learning-candidate.schema.json`, the release workflow, or
+any eval weakening/deletion); **never auto-promote** (blog/issue/researcher/model
+inference → candidate only). Authority is assigned by `knowledge/sources.yaml`, never
+by the model. Content-promotion eligibility is separate from distribution trust: a
+*missing* attestation (`None`) never reads as valid but does not by itself block
+content promotion (the attestation is applied at release, verified at runtime); only a
+genuine failed attestation blocks.
 
 ### 24.3 Eval-gated evolution
 
