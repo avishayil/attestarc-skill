@@ -1,15 +1,18 @@
-# AttestArc source registry — the root of source authority.
+# AttestArc source registry — the root of source authority (ROOT OF TRUST).
 #
 # Authority is assigned HERE, deterministically, never by the model. The Updater
-# (scripts/knowledge_compile.py) reads this file to classify a fetched document's
-# domain into a source type and its registry authority tier. A domain absent from
-# `allowlist` is `arbitrary-web` (authority 0) and MUST NOT be fetched by the
-# refresh mode nor drive a promotion. See core/promotion-policy.md and
-# THREAT_MODEL.md §6.
+# (scripts/knowledge_compile.py) reclassifies every fetched document's URL against
+# this registry to derive its publisher / type / authority; a candidate may not
+# declare its own authority. Trust is bound to an exact HTTPS origin AND, for repo
+# hosts, to specific org/repo path prefixes — never to a whole domain. A URL that
+# is not HTTPS, whose origin is absent, or whose path is outside the trusted
+# prefixes is `arbitrary-web` (authority 0): it MUST NOT be fetched by refresh nor
+# drive a promotion. Changes to this file require two-party review (see
+# core/promotion-policy.md and THREAT_MODEL.md §6).
 #
 # Format is a deliberately small YAML subset (comments, one `tiers:` mapping of
-# type -> integer, and one `allowlist:` list of {domain, publisher, type}
-# records) so it is parsed by a scoped stdlib reader — no YAML dependency.
+# type -> integer, and one `allowlist:` list of records with an optional nested
+# `path_prefixes:` list) parsed by a scoped stdlib reader — no YAML dependency.
 
 # Authority tiers. Mirrors the enum in schemas/knowledge.schema.json; the two
 # MUST agree. Higher = more trusted. Only >= 90 can auto-promote.
@@ -24,35 +27,43 @@ tiers:
   community: 20
   arbitrary-web: 0
 
-# Fetch allowlist. The refresh mode may fetch ONLY these domains. Each maps a
-# domain to its publisher and source type; the type resolves to an authority via
-# `tiers`. Subdomains match their parent entry (docs.github.com matches a
-# github.com entry only if github.com is listed; list the exact host you trust).
+# Fetch/classify allowlist. `origin` is the exact scheme+host (HTTPS only); the
+# host must match exactly (no implicit subdomain trust). For repository hosts,
+# `path_prefixes` scopes trust to specific first-party orgs/repos — so an
+# attacker-controlled repo under the same host (e.g. github.com/attacker/…) is
+# NOT vendor-repo authority. A record without `path_prefixes` trusts the whole
+# origin (only used for first-party docs/standards hosts).
 allowlist:
-  - domain: docs.github.com
+  - origin: https://docs.github.com
     publisher: GitHub
     type: vendor-docs
-  - domain: github.blog
+  - origin: https://github.blog
     publisher: GitHub
     type: vendor-changelog
-  - domain: github.com
+  - origin: https://github.com
     publisher: GitHub
     type: vendor-repo
-  - domain: raw.githubusercontent.com
+    path_prefixes:
+      - /actions/
+      - /github/
+  - origin: https://raw.githubusercontent.com
     publisher: GitHub
     type: vendor-repo
-  - domain: slsa.dev
+    path_prefixes:
+      - /actions/
+      - /github/
+  - origin: https://slsa.dev
     publisher: SLSA
     type: standard
-  - domain: openssf.org
+  - origin: https://openssf.org
     publisher: OpenSSF
     type: security-org
-  - domain: best.openssf.org
+  - origin: https://best.openssf.org
     publisher: OpenSSF
     type: security-org
-  - domain: csrc.nist.gov
+  - origin: https://csrc.nist.gov
     publisher: NIST
     type: standard
-  - domain: www.rfc-editor.org
+  - origin: https://www.rfc-editor.org
     publisher: IETF
     type: standard
