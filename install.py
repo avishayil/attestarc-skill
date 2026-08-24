@@ -28,6 +28,8 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import sys
@@ -100,6 +102,52 @@ def _frontmatter_name(skill_md: str) -> str | None:
     return _frontmatter_scalar(block, "name")
 
 
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_bundled_knowledge(source: str) -> None:
+    """Verify the bundled knowledge snapshot's integrity before shipping it.
+
+    The in-package snapshot is bootstrap-trusted because it rides in on the
+    SSH-signed skill release; there is no attestation to check at install time
+    (that is the Updater's job for downloaded bundles). But we DO confirm the
+    bundled manifest.json pins each pack by a matching sha256+size and that the
+    external trust-anchor.json is present — so a locally-corrupted or tampered
+    snapshot fails the install rather than being copied out as "trusted".
+    """
+    kroot = os.path.join(source, "knowledge")
+    if not os.path.isdir(kroot):
+        return  # a source without a knowledge plane is a no-op here
+    anchor = os.path.join(kroot, "trust-anchor.json")
+    if not os.path.exists(anchor):
+        raise InstallError("knowledge/trust-anchor.json is missing; refusing to "
+                           "install a knowledge plane with no root of trust")
+    mpath = os.path.join(kroot, "manifest.json")
+    if not os.path.exists(mpath):
+        raise InstallError("knowledge/manifest.json is missing; cannot verify "
+                           "the bundled snapshot's integrity")
+    try:
+        with open(mpath, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InstallError(f"knowledge/manifest.json is unparseable: {exc}")
+    for pack in manifest.get("packs", []):
+        name = pack.get("name", "")
+        ppath = os.path.join(kroot, name)
+        if not os.path.exists(ppath):
+            raise InstallError(f"bundled pack missing: {name}")
+        if os.path.getsize(ppath) != pack.get("size") \
+                or _sha256_file(ppath) != pack.get("sha256"):
+            raise InstallError(
+                f"bundled pack {name} does not match manifest sha256/size; "
+                f"refusing to install a tampered knowledge snapshot")
+
+
 def validate_source(source: str) -> str:
     """Ensure the source skill is well-formed; return its version string."""
     if not os.path.isdir(source):
@@ -111,6 +159,7 @@ def validate_source(source: str) -> str:
             f"{skill_md} is missing or its frontmatter name is not "
             f"'{SKILL_NAME}' (got {name!r})"
         )
+    verify_bundled_knowledge(source)
     return read_version(source) or "unknown"
 
 

@@ -30,6 +30,41 @@ def test_validate_source_reads_version():
 
 
 # --------------------------------------------------------------------------- #
+# bundled-knowledge integrity gate
+# --------------------------------------------------------------------------- #
+def test_bundled_knowledge_integrity_ok():
+    # the shipped snapshot's manifest must match its packs
+    install.verify_bundled_knowledge(install.source_skill_dir())
+
+
+def test_install_rejects_tampered_bundled_pack(tmp_path):
+    import json
+    import shutil
+    src = str(tmp_path / "skillsrc")
+    shutil.copytree(install.source_skill_dir(), src,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
+                                                   ".git", "tests"))
+    # tamper with a pack after the manifest pinned its hash
+    boot = os.path.join(src, "knowledge", "bootstrap")
+    pack = os.path.join(boot, sorted(os.listdir(boot))[0])
+    with open(pack, "a", encoding="utf-8") as fh:
+        fh.write('{"id":"KE-injected"}\n')
+    with pytest.raises(install.InstallError, match="tampered"):
+        install.verify_bundled_knowledge(src)
+
+
+def test_install_rejects_missing_trust_anchor(tmp_path):
+    import shutil
+    src = str(tmp_path / "skillsrc")
+    shutil.copytree(install.source_skill_dir(), src,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
+                                                   ".git", "tests"))
+    os.remove(os.path.join(src, "knowledge", "trust-anchor.json"))
+    with pytest.raises(install.InstallError, match="root of trust"):
+        install.verify_bundled_knowledge(src)
+
+
+# --------------------------------------------------------------------------- #
 # install / upgrade
 # --------------------------------------------------------------------------- #
 def test_install_both_project(tmp_path):

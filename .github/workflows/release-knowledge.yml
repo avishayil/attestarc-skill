@@ -1,16 +1,22 @@
-# Knowledge-plane release + signing (root-of-trust workflow).
+# Knowledge-plane release + attestation (root-of-trust workflow).
 #
-# Builds the TUF-inspired metadata over knowledge/bootstrap/*.jsonl, signs the
-# role files with the maintainer SSH signing key, and publishes a signed
-# knowledge release. Consumers verify with scripts/knowledge_verify.py against an
-# identity-constrained provenance (expected issuer / repo / workflow / ref).
+# Builds knowledge/manifest.json over knowledge/bootstrap/*.jsonl (monotonic
+# version + short TTL, pinning every pack by sha256+size), then attests the
+# manifest with GitHub Artifact Attestations (Sigstore build provenance, OIDC).
+# The attestation binds the bundle to THIS repo + workflow + issuer — the identity
+# scripts/knowledge_verify.py pins in knowledge/trust-anchor.json. There is no
+# maintainer signing key and no homemade role-file protocol: trust derives from
+# Sigstore provenance, verified locally via `gh attestation verify`.
 #
 # This workflow is itself a ROOT-OF-TRUST artifact: any change is two-party review
 # (core/promotion-policy.md, THREAT_MODEL.md §6). Third-party actions are pinned to
-# a full commit SHA. Signing is gated on the KNOWLEDGE_SIGNING_KEY secret; without
-# it the job emits bootstrap-mode (unsigned) metadata and stops before publishing —
-# it never publishes something it could not sign (fail-secure, never fetch/sign-
-# then-trust).
+# a full commit SHA. The manifest is self-verified with `gh attestation verify`
+# before publishing — it never publishes something it could not verify (fail-secure,
+# never sign/publish-then-trust).
+#
+# NOTE: actions/attest-build-provenance below MUST be pinned to a full commit SHA
+# (matching the maintainer's chosen release) before this workflow is enabled; the
+# two-party review that gates changes to this file is where that pin is set.
 
 name: release-knowledge
 
@@ -24,33 +30,37 @@ on:
         required: false
         default: ""
 
-# Least privilege: contents:write only to publish the release/revocation asset.
+# Least privilege. id-token:write is required for Sigstore/OIDC provenance;
+# attestations:write records the attestation; contents:write publishes the asset.
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-knowledge-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build-sign-publish:
+  build-attest-publish:
     if: ${{ github.event.inputs.revoke_version == '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Build TUF-inspired metadata over the packs
+      - name: Build manifest over the packs
         run: |
           python3 - <<'PY'
           import hashlib, json, os, glob, datetime
           root = "knowledge"
-          # Version is derived from the tag (knowledge-vN) or defaults to 1.
           ref = os.environ.get("GITHUB_REF_NAME", "")
           version = int(ref.split("knowledge-v")[-1]) if "knowledge-v" in ref else 1
-          expires = (datetime.datetime.now(datetime.timezone.utc)
-                     + datetime.timedelta(days=365)).strftime("%Y-%m-%dT00:00:00Z")
-          today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+          now = datetime.datetime.now(datetime.timezone.utc)
+          created = now.strftime("%Y-%m-%dT00:00:00Z")
+          # Short TTL (90 days): a frozen download past this is rejected by the
+          # client (freeze protection); the in-package snapshot only warns.
+          expires = (now + datetime.timedelta(days=90)).strftime("%Y-%m-%dT00:00:00Z")
 
           def sha256(path):
               h = hashlib.sha256()
@@ -58,117 +68,102 @@ jobs:
                   h.update(fh.read())
               return h.hexdigest()
 
-          targets = []
+          packs = []
           for p in sorted(glob.glob(os.path.join(root, "bootstrap", "*.jsonl"))):
               name = os.path.relpath(p, root)
-              targets.append({"name": name, "version": version,
-                              "previous_version": max(version - 1, 0),
-                              "sha256": sha256(p), "size": os.path.getsize(p),
-                              "valid_from": today})
-          with open(os.path.join(root, "targets.json"), "w") as fh:
-              json.dump({"_type": "targets", "spec_version": "1.0-attestarc",
-                         "version": version, "expires": expires,
-                         "targets": targets}, fh, indent=2)
-          tgt_hash = sha256(os.path.join(root, "targets.json"))
-          with open(os.path.join(root, "snapshot.json"), "w") as fh:
-              json.dump({"_type": "snapshot", "spec_version": "1.0-attestarc",
-                         "version": version, "expires": expires,
-                         "meta": {"targets.json": {"version": version,
-                                                   "sha256": tgt_hash}}}, fh, indent=2)
-          snap_hash = sha256(os.path.join(root, "snapshot.json"))
-          with open(os.path.join(root, "timestamp.json"), "w") as fh:
-              json.dump({"_type": "timestamp", "spec_version": "1.0-attestarc",
-                         "version": version, "expires": expires,
-                         "meta": {"snapshot.json": {"version": version,
-                                                    "sha256": snap_hash}}}, fh, indent=2)
-          print(f"built metadata version={version}")
+              packs.append({"name": name, "sha256": sha256(p),
+                            "size": os.path.getsize(p)})
+          manifest = {
+              "_type": "attestarc-knowledge-manifest", "spec_version": "1.0",
+              "version": version, "created_at": created, "expires": expires,
+              # prev_digest chains to the previous release's manifest when a prior
+              # LKG exists client-side; the primary anti-rollback is the client's
+              # monotonic highest-version memory. null on the first release.
+              "prev_digest": None, "mode": "signed", "packs": packs,
+          }
+          with open(os.path.join(root, "manifest.json"), "w") as fh:
+              json.dump(manifest, fh, indent=2)
+          print(f"built manifest version={version} expires={expires} packs={len(packs)}")
           PY
 
-      - name: Check for signing key
-        id: signing
-        run: |
-          if [ -n "${{ secrets.KNOWLEDGE_SIGNING_KEY }}" ]; then
-            echo "have_key=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "have_key=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No KNOWLEDGE_SIGNING_KEY; emitting bootstrap (unsigned) metadata and stopping before publish."
-          fi
+      - name: Attest the manifest (Sigstore build provenance)
+        uses: actions/attest-build-provenance@v2 # MUST pin to a full commit SHA before enabling
+        with:
+          subject-path: knowledge/manifest.json
 
-      - name: Sign role files (ssh-keygen -Y sign)
-        if: ${{ steps.signing.outputs.have_key == 'true' }}
-        env:
-          SIGNING_KEY: ${{ secrets.KNOWLEDGE_SIGNING_KEY }}
-          SIGNER_IDENTITY: ${{ secrets.KNOWLEDGE_SIGNER_IDENTITY }}
-          ALLOWED_SIGNERS: ${{ secrets.KNOWLEDGE_ALLOWED_SIGNERS }}
+      - name: Package the bundle
         run: |
-          umask 077
-          key="$(mktemp)"
-          printf '%s\n' "$SIGNING_KEY" > "$key"
-          # Flip root.json to signed mode and record the maintainer allowed-signers.
-          python3 - <<PY
-          import json
-          with open("knowledge/root.json") as fh:
-              root = json.load(fh)
-          root["mode"] = "signed"
-          # keys/roles are provisioned from the allowed-signers material out of band;
-          # this step assumes root.json already carries the maintainer keyids/threshold.
-          with open("knowledge/root.json", "w") as fh:
-              json.dump(root, fh, indent=2)
-          PY
-          for f in timestamp.json snapshot.json targets.json; do
-            ssh-keygen -Y sign -f "$key" -n attestarc-knowledge "knowledge/$f"
-          done
-          rm -f "$key"
-          # Self-check: the produced release must verify before we publish it.
-          printf '%s\n' "$ALLOWED_SIGNERS" > knowledge/allowed_signers
-          python scripts/knowledge_verify.py verify \
-            --knowledge-root knowledge --allowed-signers knowledge/allowed_signers
-          rm -f knowledge/allowed_signers
+          tar -czf "knowledge-${{ github.ref_name }}.tar.gz" \
+            knowledge/manifest.json knowledge/bootstrap
 
-      - name: Publish signed knowledge release
-        if: ${{ steps.signing.outputs.have_key == 'true' }}
+      - name: Self-verify provenance before publishing
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tar -czf knowledge-${{ github.ref_name }}.tar.gz \
-            knowledge/root.json knowledge/timestamp.json knowledge/snapshot.json \
-            knowledge/targets.json knowledge/bootstrap knowledge/*.sig
+          # Fail-secure: refuse to publish a manifest whose own attestation does
+          # not verify under this repo's identity.
+          gh attestation verify knowledge/manifest.json \
+            --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/release-knowledge.yml"
+
+      - name: Publish knowledge release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh release create "${{ github.ref_name }}" \
             "knowledge-${{ github.ref_name }}.tar.gz" \
             --title "Knowledge ${{ github.ref_name }}" \
-            --notes "Signed knowledge plane. Verify with scripts/knowledge_verify.py; expected provenance: repo ${{ github.repository }}, workflow release-knowledge, ref ${{ github.ref }}."
+            --notes "Attested knowledge plane. Verify with 'gh attestation verify' against repo ${{ github.repository }}, workflow release-knowledge.yml, issuer https://token.actions.githubusercontent.com. Install with scripts/knowledge_verify.py verify-download."
 
   revoke:
     if: ${{ github.event.inputs.revoke_version != '' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Publish revocation (kill switch)
+      - name: Build revocation record
         env:
-          GH_TOKEN: ${{ github.token }}
           REVOKE_VERSION: ${{ github.event.inputs.revoke_version }}
         run: |
           # A revocation tells clients to disable the named version, roll back to
-          # the last-known-good bundled snapshot, and mark every finding assessed
-          # under the revoked knowledge as requires_reverification (state.py
-          # reverify re-observes the actual condition — a revocation never
-          # silently resolves a finding).
+          # the last-known-good snapshot, and mark every finding assessed under the
+          # revoked knowledge as requires_reverification (state.py reverify
+          # re-observes the actual condition — a revocation never silently resolves
+          # a finding). It is attested exactly like a bundle, so a forged/unsigned
+          # revocation cannot drive the kill switch.
           python3 - <<'PY'
           import json, os, datetime
           rec = {
-              "_type": "revocation",
-              "revoked_version": os.environ["REVOKE_VERSION"],
+              "_type": "attestarc-knowledge-revocation",
+              "revoked_version": int(os.environ["REVOKE_VERSION"]),
               "revoked_at": datetime.datetime.now(datetime.timezone.utc)
                               .strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "action": "disable-version; fall back to last-known-good bundled "
-                        "snapshot; mark dependent findings requires_reverification",
+              "action": "disable-version; fall back to last-known-good; mark "
+                        "dependent findings requires_reverification",
           }
           with open("revocation.json", "w") as fh:
               json.dump(rec, fh, indent=2)
           PY
+
+      - name: Attest the revocation (Sigstore build provenance)
+        uses: actions/attest-build-provenance@v2 # MUST pin to a full commit SHA before enabling
+        with:
+          subject-path: revocation.json
+
+      - name: Self-verify and publish revocation (kill switch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVOKE_VERSION: ${{ github.event.inputs.revoke_version }}
+        run: |
+          gh attestation verify revocation.json \
+            --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/release-knowledge.yml"
           gh release create "knowledge-revocation-${REVOKE_VERSION}" \
             revocation.json \
             --title "Knowledge revocation v${REVOKE_VERSION}" \
-            --notes "KILL SWITCH: knowledge version ${REVOKE_VERSION} is revoked. Clients disable it, roll back to last-known-good, and re-verify dependent findings."
+            --notes "KILL SWITCH: knowledge version ${REVOKE_VERSION} is revoked. The revocation is Sigstore-attested; clients verify it, disable the version, roll back to last-known-good, and re-verify dependent findings."
