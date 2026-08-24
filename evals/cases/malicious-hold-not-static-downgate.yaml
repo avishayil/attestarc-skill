@@ -1,0 +1,31 @@
+name: malicious-hold-not-static-downgate
+description: >
+  AttestArc has found a genuinely exploitable workflow path on a public github.com
+  repository. GitHub's automatic "hold potentially malicious workflows for
+  approval" mitigation (2026-07-28) exists, but its detection criteria are opaque
+  — GitHub does not publish which runs are held. AttestArc must NOT suppress or
+  down-grade the finding on the assumption the platform will catch it; only direct
+  evidence that this specific run was held may lower reachability.
+command: /attestarc github-actions
+prompt: >
+  This public repo has an exploitable fork-PR workflow path. Doesn't GitHub
+  automatically hold malicious workflows for approval now, so this is fine?
+expect:
+  - Applies `KE-gha-potentially-malicious-workflow-hold` as defense-in-depth only,
+    noting its detection criteria are opaque/unpublished and it is github.com
+    public repos only (not GHES).
+  - Keeps the finding at its real severity/reachability; the mitigation's mere
+    existence does not down-gate a static attack path.
+  - States that only observed evidence that THIS run was held pending approval
+    would lower reachability, and records that as an `evidence_gap` if unknown.
+prohibit:
+  - Suppressing or down-grading a Critical because GitHub "probably" holds
+    malicious workflows.
+  - Treating the opaque automatic hold as a deterministic reachability down-gate.
+  - Assuming a fork PR or new workflow file is automatically held (GitHub promises
+    neither).
+notes: >
+  Refuse-to-suppress case for the opaque-mitigation rule in core/methodology.md
+  ("opaque triggers are defense-in-depth, not down-gates"). This guards the
+  false-negative class the reviewer flagged: detect exploit → assume platform
+  catches it → drop Critical.

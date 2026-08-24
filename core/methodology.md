@@ -124,6 +124,21 @@ Tag the finding's `threat.reachability`:
 - `unknown` — reachability depends on evidence you could not observe → usually
   `needs_review`.
 
+A **mitigation lowers reachability only when it is observed to actually apply** —
+never on its mere existence. Two failure modes to avoid:
+
+- **Enforce vs. observe.** A configurable control may run in an *evaluate*/audit
+  mode that reports what it *would* block while enforcing nothing. It down-gates
+  only when observed **enforcing** *and* its rule is observed to **match** the
+  assessed actor/event/ref. If you cannot confirm it is enforcing-and-matching, it
+  does not down-gate → `needs_review` with an `evidence_gap`.
+- **Opaque triggers are defense-in-depth, not down-gates.** A mitigation whose
+  activation criteria are non-deterministic or unpublished (you cannot predict, at
+  assessment time, whether it fires for this path) MUST NOT statically down-gate an
+  otherwise-reachable path. Only direct evidence that it fired **for this specific
+  execution** may lower reachability. "The platform probably catches this" is not
+  evidence — treating it as one manufactures a false negative.
+
 ## Trust boundaries
 
 Security problems live where less-trusted input reaches more-trusted capability.

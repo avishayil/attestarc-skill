@@ -331,9 +331,16 @@ def verify_installed(knowledge_root=None, anchor=None, client_state=None,
         trusted = integrity_ok and matches and not revoked
         source = "verified-lkg" if trusted else "unverified"
 
+    # Freshness is a SEPARATE dimension from integrity/trust. An expired bundled
+    # snapshot stays trusted (it is the last-known-good floor), but downstream the
+    # assessor treats a stale snapshot's mitigation/down-gate facts as
+    # non-conclusion-driving (see knowledge.py apply_freshness). A manifest with no
+    # expiry is treated as fresh.
+    fresh = not expired
     return {"trusted": trusted, "source": source, "knowledge_root": root_real,
             "version": version, "manifest_sha256": manifest_digest,
             "is_package_bootstrap": is_package,
+            "fresh": fresh, "expires": manifest.get("expires"),
             "checks": report.checks, "warnings": report.warnings,
             "packs": [p.get("name") for p in manifest.get("packs", [])]}
 
@@ -341,6 +348,7 @@ def verify_installed(knowledge_root=None, anchor=None, client_state=None,
 def _untrusted(report, root_real, source):
     return {"trusted": False, "source": source, "knowledge_root": root_real,
             "version": None, "manifest_sha256": None,
+            "fresh": False, "expires": None,
             "checks": report.checks, "warnings": report.warnings, "packs": []}
 
 

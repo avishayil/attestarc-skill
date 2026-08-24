@@ -53,6 +53,39 @@ def test_install_rejects_tampered_bundled_pack(tmp_path):
         install.verify_bundled_knowledge(src)
 
 
+def test_install_rejects_provenance_violating_snapshot(tmp_path):
+    """A pack can hash-match its manifest yet violate the trust contract (an entry
+    declaring a higher authority than the registry assigns its URL). The install
+    gate must catch this even after the manifest hash is 'repaired'."""
+    import hashlib
+    import json
+    import shutil
+    src = str(tmp_path / "skillsrc")
+    shutil.copytree(install.source_skill_dir(), src,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
+                                                   ".git", "tests"))
+    boot = os.path.join(src, "knowledge", "bootstrap")
+    pack = os.path.join(boot, "github-actions.jsonl")
+    lines = open(pack, encoding="utf-8").read().splitlines()
+    first = json.loads(lines[0])
+    first["sources"][0]["authority"] = 42  # disagrees with the registry
+    lines[0] = json.dumps(first)
+    data = ("\n".join(lines) + "\n").encode("utf-8")
+    with open(pack, "wb") as fh:
+        fh.write(data)
+    # Repair the manifest hash/size so the byte-integrity gate passes.
+    mpath = os.path.join(src, "knowledge", "manifest.json")
+    manifest = json.loads(open(mpath, encoding="utf-8").read())
+    for p in manifest["packs"]:
+        if p["name"] == "bootstrap/github-actions.jsonl":
+            p["sha256"] = hashlib.sha256(data).hexdigest()
+            p["size"] = len(data)
+    with open(mpath, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh)
+    with pytest.raises(install.InstallError, match="trust contract"):
+        install.verify_bundled_knowledge(src)
+
+
 def test_install_rejects_missing_trust_anchor(tmp_path):
     import shutil
     src = str(tmp_path / "skillsrc")

@@ -244,7 +244,10 @@
               <tr><td>Attestation absent / identity mismatch (download)</td><td><strong>Discard</strong> the download; keep the installed last-known-good</td></tr>
               <tr><td>Manifest/pack tampered, rolled back, or frozen (expired)</td><td><strong>Discard</strong> the download; keep the installed last-known-good</td></tr>
               <tr><td>Downloaded bundle presents <code>mode: bootstrap</code></td><td><strong>Reject</strong> — bootstrap is valid only for the in-package snapshot</td></tr>
-              <tr><td>Installed knowledge expired</td><td>Warn; the in-package snapshot remains bootstrap-usable</td></tr>
+              <tr><td>Installed knowledge expired (stale / frozen)</td><td>Warn; stays trusted as the last-known-good floor, but a stale down-gate fact (<code>effect: mitigation</code>/<code>neutral</code>) no longer drives a conclusion — only <code>risk-increasing</code> facts keep driving</td></tr>
+              <tr><td>Snapshot violates its own trust contract (schema / provenance-vs-registry / secret)</td><td><code>validate_snapshot</code> withholds trust → set untrusted (<code>needs_review</code>); refused at install time</td></tr>
+              <tr><td>A verified pack only partially parses</td><td>Treat the whole set as inconsistent — never reason over the lines that happened to parse</td></tr>
+              <tr><td>Read with the verify-gate skipped (<code>--allow-unverified</code>, tooling only)</td><td>Facts surfaced, but <code>drives_conclusion</code> forced false</td></tr>
               <tr><td>Knowledge unavailable</td><td>Fall back to the in-package snapshot</td></tr>
               <tr><td>Knowledge conflict (authoritative vs authoritative)</td><td><code>status: disputed</code> → downgrade dependents to <code>needs_review</code></td></tr>
               <tr><td>Unknown platform / version</td><td><code>needs_review</code></td></tr>
@@ -276,6 +279,8 @@
           <article class="card reveal"><h3>Quarantine receipts</h3><p>Fetched documents are stored by content hash with a receipt binding the object to derived provenance, and treated as inert data — never as instructions.</p></article>
           <article class="card reveal"><h3>The eval corpus is root-of-trust</h3><p>A knowledge change may add paired find/refuse evals but can never weaken or delete a trusted eval in the same step — a poisoning change cannot also delete the test that catches it.</p></article>
           <article class="card reveal"><h3>Findings bound by content hash</h3><p>Findings record <code>{id, content_hash}</code> dependencies; a superseded fact surfaces <code>requires_reverification</code> as a read-time view — never a silent mutation, never an auto-resolve.</p></article>
+          <article class="card reveal"><h3>Integrity ≠ conformance</h3><p>A matching attested pack hash proves only <em>these are the released bytes</em>. Before it drives a conclusion, a snapshot must also pass <code>validate_snapshot</code>: every entry schema-valid, every source's authority matching the registry's classification of its URL, no secret-looking value — checked at install and on every read.</p></article>
+          <article class="card reveal"><h3>Not even a hash of a secret</h3><p>A secret-like injection attempt is fingerprinted for audit, but if the text looks like a secret the hash is withheld — a low-entropy secret is recoverable from its sha256, so only a redaction marker is stored.</p></article>
         </div>
       </div>
     </section>

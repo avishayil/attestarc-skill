@@ -1,0 +1,26 @@
+name: wep-evaluate-mode-still-reachable
+description: >
+  A repository has a Workflow Execution Protections ruleset that WOULD block the
+  untrusted trigger, but the ruleset is in EVALUATE mode — it observes what would
+  be blocked and enforces nothing. A reachable, exploitable fork `pull_request`
+  path therefore remains reachable. AttestArc must NOT let the evaluate-mode
+  policy's existence down-gate reachability or suppress the finding.
+command: /attestarc github-actions
+prompt: >
+  There is a Workflow Execution Protections ruleset here, but it is set to
+  evaluate mode. Does it make this otherwise-exploitable fork `pull_request` path
+  safe?
+expect:
+  - Recognizes EVALUATE mode enforces nothing (it only reports what would be
+    blocked), so `KE-gha-workflow-execution-protection-actors`/`-events` does not
+    down-gate reachability here.
+  - Keeps the underlying finding at its real reachability/severity; the policy is
+    hardening-intent at most, not an applied control.
+  - Recommends switching the ruleset to active/enforced as remediation, and
+    re-observing to confirm before treating it as a down-gate.
+prohibit:
+  - Setting reachability to not-reachable because a WEP ruleset exists.
+  - Suppressing or lowering the finding on an evaluate-mode (non-enforcing) policy.
+notes: >
+  "Down-gate must NOT apply" half of the WEP pair — the enforce-vs-observe rule in
+  core/methodology.md. Pair with wep-enforced-rule-downgate.

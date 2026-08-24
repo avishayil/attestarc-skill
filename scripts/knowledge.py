@@ -273,9 +273,13 @@ def check_consistency(entries) -> dict:
     # be true. Complementary facts about one subject do NOT share a claim_key and
     # are never flagged — this avoids false positives while still catching the
     # classic poisoning shape ("X is writable" vs "X is read-only").
+    # Any confidence that can drive a conclusion (authoritative OR corroborated)
+    # must be checked — two contradictory *corroborated* entries would otherwise
+    # both remain conclusion-driving. Keep this in lockstep with the confidence
+    # gate in ``lookup`` (``_ACTIVE_CONFIDENCES``).
     active_auth = [e for e in entries
                    if e.get("status") == "active"
-                   and e.get("confidence") == "authoritative"
+                   and e.get("confidence") in _ACTIVE_CONFIDENCES
                    and e.get("claim_key")]
     for i in range(len(active_auth)):
         for j in range(i + 1, len(active_auth)):
@@ -306,6 +310,95 @@ def _scopes_overlap(a: dict, b: dict) -> bool:
     return True
 
 
+def validate_snapshot(entries, registry) -> dict:
+    """Validate that every entry in a verified snapshot satisfies the trust
+    contract — not merely that the bytes match the attested pack hash.
+
+    A pack hash proves *these are the released bytes*; it does not prove the
+    bytes obey the policy the plane claims to enforce. The shipped bootstrap has
+    already drifted here (an entry declaring a higher authority tier than the
+    source registry assigns its URL). This is the deterministic gate that catches
+    that class of drift: each entry must have its required fields and valid enums,
+    each source's declared ``publisher``/``type``/``authority`` must match the
+    registry's reclassification of the URL (never the value written in the pack),
+    every source URL must be registry-allowed, and no entry may carry a
+    secret-looking value. Facts, not verdicts: it returns the violations; the
+    caller (``open_verified`` / the installer) decides to withhold trust.
+
+    ``registry`` is the parsed package source registry — the classification root
+    of trust — and MUST be loaded from the in-package snapshot, never from a
+    refreshed snapshot that an attacker could shape.
+    """
+    import knowledge_compile as kc  # pure registry/enum helpers; no network
+    import state                    # shared secret guard
+
+    violations: list = []
+    for e in entries:
+        eid = e.get("id")
+        pub = _public(e)
+        for key in kc._REQUIRED:
+            if key not in pub:
+                violations.append({"kind": "missing-field", "id": eid,
+                                   "field": key})
+        for field, allowed in (("kind", kc._KINDS), ("status", kc._STATUSES),
+                               ("confidence", kc._CONFIDENCES),
+                               ("effect", kc._EFFECTS)):
+            if field in pub and pub.get(field) not in allowed:
+                violations.append({"kind": "bad-enum", "id": eid,
+                                   "field": field, "value": pub.get(field)})
+
+        sources = pub.get("sources")
+        if not isinstance(sources, list) or not sources:
+            violations.append({"kind": "no-sources", "id": eid})
+            sources = []
+        for i, src in enumerate(sources):
+            if not isinstance(src, dict):
+                violations.append({"kind": "bad-source", "id": eid, "index": i})
+                continue
+            url = src.get("url")
+            if not isinstance(url, str) or not url:
+                violations.append({"kind": "source-no-url", "id": eid,
+                                   "index": i})
+                continue
+            derived = kc.classify_source(url, registry)
+            if not derived.get("allowed"):
+                violations.append({"kind": "source-not-allowed", "id": eid,
+                                   "index": i, "url": url,
+                                   "reason": derived.get("reason")})
+            for field, key in (("type", "type"), ("authority", "authority"),
+                               ("publisher", "publisher")):
+                if field in src and src.get(field) != derived.get(key):
+                    violations.append({
+                        "kind": "provenance-mismatch", "id": eid, "index": i,
+                        "field": field, "declared": src.get(field),
+                        "derived": derived.get(key)})
+
+        for path, text in state._iter_string_paths(pub):
+            if state.looks_like_secret(text):
+                violations.append({"kind": "secret-in-entry", "id": eid,
+                                   "path": path})
+
+    return {"valid": not violations, "violations": violations}
+
+
+def apply_freshness(hits, fresh) -> None:
+    """Downgrade stale down-gate facts in place (the freshness dimension).
+
+    Integrity and freshness are separate: a snapshot can be intact yet stale (past
+    its manifest expiry — a freeze). A stale *mitigation* or *neutral* fact must
+    not drive a conclusion, because a down-gate that has silently changed upstream
+    would wrongly suppress a finding; those are routed to ``needs_review``. A
+    *risk-increasing* fact may keep driving even when stale — failing toward more
+    scrutiny is safe. Fresh snapshots are untouched. ``effect`` defaults to
+    ``neutral`` when absent (conservative)."""
+    if fresh is not False:  # fresh, or unknown (do not downgrade on unknown)
+        return
+    for h in hits:
+        if h.get("effect", "neutral") != "risk-increasing" and h.get("drives_conclusion"):
+            h["drives_conclusion"] = False
+            h["freshness"] = "stale-downgraded"
+
+
 def build_index(entries) -> dict:
     """id -> {version, content_hash, status}: the input to state.py reverify."""
     index = {}
@@ -331,8 +424,35 @@ def open_verified(knowledge_root=None, now=None):
     """
     root = knowledge_root or _DEFAULT_KNOWLEDGE_ROOT
     verification = knowledge_verify.verify_installed(knowledge_root=root, now=now)
-    entries, _ = load_packs(os.path.abspath(root))
+    entries, summaries = load_packs(os.path.abspath(root))
     consistency = check_consistency(entries)
+    # A pack that only partially parsed is a partially-consumed verified set: the
+    # attested bytes did not fully load, so we cannot claim the snapshot is intact.
+    # Treat it as inconsistent (fail closed) rather than silently reasoning over the
+    # lines that happened to parse.
+    partial = [s["pack"] for s in summaries if s.get("parse_partial")]
+    if partial:
+        consistency = dict(consistency)
+        consistency["consistent"] = False
+        consistency["conflicts"] = list(consistency.get("conflicts") or []) + [
+            {"kind": "parse-partial", "pack": p} for p in partial]
+    # Snapshot self-validation: the entries must obey the trust contract (schema,
+    # registry-derived provenance, secret policy), not merely hash-match the
+    # attested packs. The classification registry is the PACKAGE registry (the
+    # root of trust), never one from a refreshed snapshot. If it cannot be loaded,
+    # fail closed — an unvalidatable snapshot is not trustworthy.
+    try:
+        import knowledge_compile as kc
+        registry = kc.load_registry(_DEFAULT_KNOWLEDGE_ROOT)
+        snapshot = validate_snapshot(entries, registry)
+    except Exception as exc:  # noqa: BLE001 — degrade to untrusted, never crash
+        snapshot = {"valid": False,
+                    "violations": [{"kind": "validate-error", "error": str(exc)}]}
+    if not snapshot.get("valid"):
+        consistency = dict(consistency)
+        consistency["consistent"] = False
+        consistency["conflicts"] = list(consistency.get("conflicts") or []) + [
+            {"kind": "snapshot-invalid", "violations": snapshot["violations"]}]
     trusted = bool(verification.get("trusted")) and consistency.get("consistent")
     if not trusted:
         for e in entries:
@@ -394,12 +514,19 @@ def cmd_lookup(args) -> int:
                   topic=args.topic, as_of=args.as_of,
                   context=_context_from_args(args),
                   include_noncurrent=args.include_noncurrent)
-    trusted = (verification.get("trusted") is not False) and consistency.get("consistent")
+    # Only an explicit, positive verification result may leave conclusions standing.
+    # ``--allow-unverified`` sets ``trusted:None`` (verification skipped) — that path
+    # surfaces facts for investigation but MUST NOT drive a conclusion, so ``None``
+    # fails the gate exactly like ``False``.
+    trusted = (verification.get("trusted") is True) and consistency.get("consistent")
     if not trusted:
-        # Verification failed or the set is inconsistent: no entry may drive a
-        # conclusion. Fail secure — surface the facts and withhold conclusion.
+        # Verification failed/skipped or the set is inconsistent: no entry may drive
+        # a conclusion. Fail secure — surface the facts and withhold conclusion.
         for h in hits:
             h["drives_conclusion"] = False
+    else:
+        # Trusted but possibly stale: withhold conclusion from stale down-gate facts.
+        apply_freshness(hits, verification.get("fresh"))
     out = {"verification": verification, "consistency": consistency, "hits": hits}
     print(json.dumps(out, indent=2, sort_keys=True))
     return 0

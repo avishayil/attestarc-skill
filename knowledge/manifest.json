@@ -7,7 +7,7 @@
   "prev_digest": null,
   "comment": "Manifest for one atomic knowledge release. Pins every pack by sha256+size so the packs cannot be altered without changing the manifest, and the manifest is what the release workflow attests (Sigstore build provenance). 'version' is monotonic; a client rejects any manifest whose version is <= the highest version it has already trusted (anti-rollback). 'prev_digest' chains to the previous manifest. In the in-package bootstrap snapshot there is no attestation: it is trusted because it rode in on the SSH-signed skill release.",
   "packs": [
-    {"name": "bootstrap/github-actions.jsonl", "sha256": "85c8dad7c4f5ef010d037669fe2ec64afa4de55d082a4bd11150dd585c8e855c", "size": 6282},
+    {"name": "bootstrap/github-actions.jsonl", "sha256": "0670712cc0f40864fca85b6d89b72ebcf4c3f444e9019bded470817865163a9e", "size": 10987},
     {"name": "bootstrap/github-scm.jsonl", "sha256": "80b6d62f63b14afc2905f9450576aaa9a74ffd18b9c74b5d76530d38194b575f", "size": 1972},
     {"name": "bootstrap/identity.jsonl", "sha256": "e0ed3a2f6bc629aa40b90ca7e83ae21c97f847f6654ea779fa6a7f19ab6b24fb", "size": 3460},
     {"name": "bootstrap/slsa.jsonl", "sha256": "59ec4c1b886077b942b1e0f212a4dd6c55d3e0f1e8c8d34c252e356d655c6fe1", "size": 1605}

@@ -381,18 +381,41 @@ mitigation is present, and never turn its absence into a finding:
   enforcement; it stays a live drift finding (`mutable-reusable-workflow`). Only
   `step.uses` Action refs are down-gated. When in doubt about which kind a `uses:`
   is, the inspector's `kind` (`external` vs `reusable-workflow`) tells you.
-- **Workflow Execution Protections / fork-PR approval**
-  (`KE-gha-workflow-execution-protections`) — "require approval for all outside
-  collaborators" (or all fork PRs) gates whether an untrusted trigger runs at
-  all. An approval-gated fork `pull_request` is not attacker-reachable
-  without a maintainer's action; note that human approval is the control and can
-  be socially engineered, but it is a real gate.
+- **Fork-PR workflow approval**
+  (`KE-gha-fork-pr-workflow-approval`) — the "require approval for fork pull
+  request workflows" setting (first-time contributors, all outside collaborators,
+  or all fork PRs) gates whether an untrusted trigger runs at all. An
+  approval-gated fork `pull_request` is not attacker-reachable without a
+  maintainer's action; note that human approval is the control and can be socially
+  engineered, but it is a real gate.
+- **Workflow Execution Protections** (Public Preview, announced 2026-06-18;
+  rulesets-backed at enterprise/org/repo level, subject to change) —
+  (`KE-gha-workflow-execution-protection-actors`,
+  `KE-gha-workflow-execution-protection-events`) rulesets that allow-list which
+  **actors** (users, repo roles, GitHub Apps, Copilot, Dependabot) or **events**
+  (`push`, `pull_request`, `pull_request_target`, `workflow_dispatch`) may trigger
+  a workflow, evaluated **before** execution. This down-gates reachability **only
+  when observed to actually enforce**: walk `ruleset exists → ACTIVE (not
+  EVALUATE) → targets this repository → its actor/event rule matches this
+  execution`. An EVALUATE-mode ruleset only reports what *would* be blocked and
+  enforces nothing, so its mere presence must never set `reachable = false`.
 - **Allowed-actions and reusable-workflow allow-lists** — restrict which external
   code can execute, narrowing the untrusted-code surface.
 
 These are down-gates on **reachability**, not evidence of a finding. A movable
 ref under an enforced SHA policy is hardening-at-most; the same ref with no such
 policy (or an unverifiable one) stays reachable.
+
+**Not a static down-gate: automatic malicious-workflow hold.** For public
+github.com repositories, GitHub automatically holds runs it identifies as
+"potentially malicious" for write-collaborator approval
+(`KE-gha-potentially-malicious-workflow-hold`, 2026-07-28; not on GHES). Its
+detection criteria are **opaque** — GitHub does not publish them — so AttestArc
+cannot predict which runs are held. Treat it as **defense-in-depth only**: it MUST
+NOT down-gate an otherwise-reachable path. Only observed run evidence (this
+specific run was held pending approval) may lower reachability; the feature's
+existence never does. Suppressing a Critical because "GitHub probably holds
+malicious workflows" is exactly the false-negative this rule forbids.
 
 ## Runners
 

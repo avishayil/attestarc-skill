@@ -74,7 +74,18 @@ Attested, versioned, temporal, provenance-backed knowledge packs (`knowledge/`).
   release); a refreshed snapshot is trusted only if persistent client state records
   that its exact version + manifest digest was attestation-verified.
 - Every entry MUST carry provenance (a registry-derived source, bound to a fetched
-  object), and the pack set is only trusted after `check_consistency` passes.
+  object), and the pack set is only trusted after `check_consistency` **and**
+  `validate_snapshot` pass. A matching attested pack hash proves *these are the
+  released bytes*; it does NOT prove the bytes obey the trust contract. Byte
+  integrity is therefore necessary but not sufficient: `validate_snapshot`
+  additionally requires every entry to be schema-valid, every source's declared
+  `publisher`/`type`/`authority` to match the source registry's reclassification of
+  its URL (never the value written in the pack), every source URL to be
+  registry-allowed, and no entry to carry a secret-looking value. This gate runs at
+  install time (`install.py`) and again on the Assessor read path (`open_verified`);
+  a violation withholds trust (route to `needs_review`). A pack that only partially
+  parses (`parse_partial`) is a partially-consumed verified set and likewise fails
+  closed — the snapshot is untrusted rather than reasoned over line-by-line.
 
 ### 2.3 CANDIDATE KNOWLEDGE — untrusted
 
@@ -145,7 +156,10 @@ The runtime NEVER fetches-then-trusts. On any anomaly it degrades safely:
 | Attestation absent / identity mismatch (download) | **Discard** the download; keep the installed last-known-good |
 | Manifest/pack tampered, rolled back, or frozen (expired) | **Discard** the download; keep the installed last-known-good |
 | Downloaded bundle presents `mode: bootstrap` | **Reject** — bootstrap is valid ONLY for the in-package snapshot |
-| Installed knowledge expired | Warn; the in-package snapshot remains bootstrap-usable |
+| Installed knowledge expired (stale/frozen) | Warn; snapshot stays trusted as the last-known-good floor, but a **stale down-gate** fact (`effect: mitigation`/`neutral`) no longer drives a conclusion (route to `needs_review`) — only `effect: risk-increasing` facts keep driving (failing toward scrutiny) |
+| Snapshot violates its own trust contract (schema / provenance-vs-registry / secret) | `validate_snapshot` withholds trust → set untrusted (`needs_review`); refused at install time |
+| A verified pack only partially parses (`parse_partial`) | Treat the whole set as inconsistent/untrusted — never reason over the lines that happened to parse |
+| Knowledge read with the gate skipped (`--allow-unverified`, tooling only) | Facts are surfaced but `drives_conclusion` is forced false — an unverified read can never close a chain |
 | Knowledge unavailable | Fall back to the in-package snapshot |
 | Knowledge conflict (authoritative vs authoritative) | `status: disputed` → downgrade dependent conclusions to `needs_review` |
 | Source unavailable | Do not invent an answer |
@@ -191,6 +205,12 @@ find/refuse evals but MUST NOT weaken or delete trusted evals in the same trust 
 - Secrets and private repository content MUST NEVER enter the learning pipeline;
   learning defaults to local-only. Sanitized attack *shapes* (not code) are the only
   material that may generalize.
+- A secret value MUST NOT be persisted even as a hash. `record-safety-event`
+  fingerprints an injection attempt with a `content_hash`, but when the injected
+  text looks like a secret the hash is **withheld** (a short/low-entropy secret is
+  recoverable from its sha256 by brute force / rainbow table); only a
+  `content_redacted` marker plus source/location metadata is stored, keeping the
+  attempt auditable without persisting a recoverable fingerprint.
 
 ## 8. Kill switch
 

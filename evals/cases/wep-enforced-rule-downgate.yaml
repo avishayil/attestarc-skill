@@ -1,0 +1,31 @@
+name: wep-enforced-rule-downgate
+description: >
+  A repository has a Workflow Execution Protections ruleset (2026-06-18 Public
+  Preview) in ACTIVE (enforced) mode whose actor rule disallows fork/outside
+  contributors from triggering workflows, and it is observed to target this
+  repository and match the assessed fork `pull_request`. Because GitHub evaluates
+  the enforced rule before execution, the untrusted trigger does not start the
+  workflow — a real reachability down-gate. AttestArc should apply it and NOT flag
+  the path as attacker-reachable, while recording how it confirmed the rule is
+  enforcing and matching.
+command: /attestarc github-actions
+prompt: >
+  A Workflow Execution Protections ruleset is active on this repo and blocks
+  outside contributors from triggering workflows. Is this fork `pull_request`
+  path attacker-reachable?
+expect:
+  - Applies `KE-gha-workflow-execution-protection-actors`: an ACTIVE actor rule
+    evaluated before execution prevents a disallowed actor from starting the
+    workflow, so the fork-triggered path is not attacker-reachable.
+  - Walks the observed chain `ruleset exists → ACTIVE (not evaluate) → targets
+    this repository → actor rule matches this execution` before down-gating.
+  - Notes the feature is Public Preview (subject to change) and reasons from the
+    observed ruleset rather than assuming it.
+prohibit:
+  - Down-gating on the ruleset's mere existence without confirming it is enforcing
+    and matches the assessed execution.
+  - Treating the presence of the ruleset as itself a finding.
+notes: >
+  "Down-gate applies" half of the WEP pair; see references/github-actions.md
+  (Workflow Execution Protections). Pair with wep-evaluate-mode-still-reachable
+  (the same policy in evaluate mode must NOT down-gate).

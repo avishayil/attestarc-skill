@@ -392,13 +392,16 @@ finding, and MUST NOT be acted upon. When the Host chooses to record it, it SHAL
 append an entry to the top-level `assessor_safety_events` array (each entry: a
 `source` of `repository-content` | `tool-output` | `findings-json`, a
 `detected_at`, a `content_hash` (sha256 of the injected text), and OPTIONAL
-`location`, an inert sanitized `excerpt`, and `action_taken`). This separation
-guarantees that an attempt to steer the assessor can never be mistaken for a
-security property of the repository. `state.py record-safety-event` is the
-deterministic path: it SHALL accept the event payload as JSON on **stdin** (the
-`-` source) so untrusted injected text never rides the shell command line, and
-SHALL by default persist only a `content_hash` plus metadata. A raw `excerpt` is
-stored **only** when explicitly supplied as already-sanitized inert data
+`location`, an inert sanitized `excerpt`, `content_redacted`, and `action_taken`).
+This separation guarantees that an attempt to steer the assessor can never be
+mistaken for a security property of the repository. `state.py record-safety-event`
+is the deterministic path: it SHALL accept the event payload as JSON on **stdin**
+(the `-` source) so untrusted injected text never rides the shell command line, and
+SHALL by default persist only a `content_hash` plus metadata. When the injected text
+looks like a secret the `content_hash` SHALL be **withheld** (a low-entropy secret
+is recoverable from its sha256) and a `content_redacted` marker stored instead, so
+the attempt stays auditable without persisting a recoverable fingerprint. A raw
+`excerpt` is stored **only** when explicitly supplied as already-sanitized inert data
 (secret-scanned, size-capped); it is never an instruction.
 
 ## 7. Assessment domains
@@ -461,8 +464,8 @@ An `evidence_gaps` entry SHALL explain *why the missing evidence matters* and
    settings** that decide whether fork pull requests can receive write tokens or
    secrets (e.g. run-workflows-from-fork-PRs, send-write-tokens-to-workflows,
    send-secrets-and-variables, require-approval-for-fork-PR-workflows). Where an
-   Actions policy enforces **SHA pinning**, or **Workflow Execution Protections**
-   gate untrusted triggers, the Host SHALL treat these as reachability down-gates
+   Actions policy enforces **SHA pinning**, or a **fork-PR workflow-approval gate**
+   holds untrusted triggers, the Host SHALL treat these as reachability down-gates
    (a movable `uses:` ref or fork trigger is not reachable the usual way) rather
    than as findings. The SHA-pinning down-gate is scoped: an enforced require-SHA
    policy constrains **Action** refs (`step.uses`), but does **not** apply to
@@ -918,7 +921,9 @@ rationale.
 
 The runtime NEVER fetches-then-trusts. On any anomaly it degrades safely: a bad
 signature SHALL reject the pack; expired or unavailable knowledge SHALL fall back
-to the last-known-good bundled snapshot with a warning; an authoritative-vs-
+to the last-known-good bundled snapshot with a warning; a snapshot that fails its
+self-validation gate (schema / provenance-vs-registry / secret, §23.3) or that only
+partially parses SHALL be treated as untrusted (fail closed); an authoritative-vs-
 authoritative conflict SHALL mark the entry `disputed` and downgrade dependent
 conclusions to `needs_review`; an unknown platform/version SHALL route to
 `needs_review`; and an Updater that looks compromised SHALL be disabled.
@@ -958,9 +963,11 @@ SHALL contain `id`, `kind` (`platform-semantics` | `api` | `standard` | `guidanc
 | `retired` | `draft`), `confidence` (`authoritative` | `corroborated` |
 `candidate`), and `sources` (each: `publisher`, `authority` (integer, assigned by
 the registry — never model-chosen), `type`, `url`, `retrieved_at`,
-`content_hash`). It MAY contain `expires`, `supersedes`, `last_verified`, and
-`compiler.version`. Stable objects SHALL set `additionalProperties: false` with an
-explicit `extensions` escape hatch, mirroring the findings schema (§6.2).
+`content_hash`). It MAY contain `expires`, `supersedes`, `last_verified`,
+`compiler.version`, and `effect` (`mitigation` | `risk-increasing` | `neutral`;
+default `neutral` when absent — the direction the claim moves an assessment, read by
+the freshness gate in §23.3). Stable objects SHALL set `additionalProperties: false`
+with an explicit `extensions` escape hatch, mirroring the findings schema (§6.2).
 
 ### 23.2 Temporality
 
@@ -994,6 +1001,28 @@ switch (`THREAT_MODEL.md` §8): the revocation is itself attested; clients verif
 disable the version, roll back to the last verified snapshot, and mark findings
 assessed under it `requires_reverification`.
 
+A matching attested pack hash establishes byte integrity but NOT policy
+conformance. Before a snapshot is trusted for reasoning it SHALL additionally pass
+`validate_snapshot`: every entry schema-valid; every source's declared
+`publisher`/`type`/`authority` matching the source registry's reclassification of
+its URL (never the value written in the pack); every source URL registry-allowed;
+and no entry carrying a secret-looking value. This gate SHALL run both at install
+time (`install.py verify_bundled_knowledge`) and on the Assessor read path
+(`open_verified`); a violation SHALL withhold trust (route to `needs_review`) and,
+at install time, refuse the snapshot. A pack that only partially parses
+(`parse_partial`) SHALL make the whole set inconsistent (fail closed), never reasoned
+over line-by-line. A read that deliberately skips the verify-gate
+(`--allow-unverified`, tooling only) SHALL surface facts with `drives_conclusion`
+forced false.
+
+Freshness is a SEPARATE dimension from integrity. `verify_installed` SHALL report
+`fresh` (is the snapshot within its manifest expiry?) independently of `trusted`: an
+expired bundled snapshot stays trusted as the last-known-good floor but is reported
+not-fresh. When the snapshot is trusted but not fresh, a fact with
+`effect: mitigation` or `neutral` SHALL NOT drive a conclusion (a stale down-gate
+could wrongly suppress a finding — route to `needs_review`), while an
+`effect: risk-increasing` fact MAY keep driving (failing toward scrutiny is safe).
+
 ### 23.4 Findings ↔ knowledge dependencies
 
 A finding derived from a knowledge entry SHALL record `knowledge_dependencies`
@@ -1011,7 +1040,11 @@ The Host SHALL re-observe the actual condition before acting on such a finding
 `scripts/knowledge.py` SHALL provide `status` (per-domain freshness), `lookup`
 (`--platform`/`--subject`/`--topic`, OPTIONAL `--as-of`; temporal and status-aware),
 and `explain <id>` (claim, applicability, sources, `valid_from`, `last_verified`,
-supersession). It emits facts, holds no network access, and is confined to its own
+supersession). Its `open_verified` read path SHALL gate conclusion-driving on
+attestation state, `check_consistency` (no contradictory `active` conclusion-driving
+entries — authoritative OR corroborated — sharing a `claim_key`), and
+`validate_snapshot` (§23.3). It emits facts, holds no network access, and is confined
+to its own
 knowledge-root base directory (default `~/.attestarc/knowledge`, global across
 repositories) via `_pathsafe` with a root distinct from — and never derived from —
 the assessed repository. `scripts/knowledge_compile.py` is the Updater's ingest

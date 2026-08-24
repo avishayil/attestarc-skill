@@ -48,10 +48,11 @@ _NEVER_AUTO_TYPES = ("research", "issue", "community", "arbitrary-web")
 _REQUIRED = ("id", "kind", "platform", "subject", "claim", "valid_from",
              "status", "confidence", "sources")
 _ALLOWED_TOP = _REQUIRED + ("applies_to", "expires", "supersedes",
-                            "last_verified", "compiler", "extensions")
+                            "last_verified", "compiler", "extensions", "effect")
 _KINDS = ("platform-semantics", "api", "standard", "guidance")
 _STATUSES = ("active", "superseded", "disputed", "retired", "draft")
 _CONFIDENCES = ("authoritative", "corroborated", "candidate")
+_EFFECTS = ("mitigation", "risk-increasing", "neutral")
 # A source must carry a URL and be bound to a quarantined object: either an
 # inline content_hash + retrieved_at, or a receipt_id resolvable to a receipt
 # that carries them. publisher/type/authority are DERIVED from the URL via the

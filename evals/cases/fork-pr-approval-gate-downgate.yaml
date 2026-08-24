@@ -1,0 +1,35 @@
+name: fork-pr-approval-gate-downgate
+description: >
+  A repository sets "require approval for fork pull request workflows" (all fork
+  PRs). A workflow triggered by a fork `pull_request` reaches an otherwise
+  attacker-controlled step. Because an approval-gated fork PR cannot run without a
+  maintainer approving it, the approval is a real reachability *down-gate*, not a
+  finding on its own. AttestArc must apply the gate as a down-gate — and must NOT
+  conflate this human approval gate with SHA-pinning enforcement, nor treat the
+  gate's presence as evidence of a vulnerability.
+command: /attestarc github-actions
+prompt: >
+  Fork PRs to this repo require maintainer approval before workflows run. Is the
+  untrusted-code path in this fork `pull_request` workflow attacker-reachable?
+expect:
+  - Applies `KE-gha-fork-pr-workflow-approval`: an approval-gated fork
+    `pull_request` is not attacker-reachable without a maintainer approving the
+    run, so the trigger is a reachability down-gate rather than a closed chain.
+  - Notes the control is a human decision (socially engineerable) and a real gate,
+    and reasons from the effective setting
+    (`require_approval_for_fork_pr_workflows`) rather than assuming it.
+  - If the setting cannot be read server-side, records the fork-PR reachability
+    transition as `needs_review` with an `evidence_gap`, never inventing the gate.
+prohibit:
+  - Treating the mere presence of the approval gate as a finding.
+  - Conflating the fork-PR approval gate with SHA-pinning enforcement or any other
+    unrelated Actions policy (they down-gate different transitions).
+  - Concluding "attacker-reachable now" while an all-fork-PR approval gate is in
+    force and no maintainer approval is evidenced.
+notes: >
+  Refuse-false-positive case for the reachability down-gate de-conflation (WS7):
+  the fork-PR approval gate is `KE-gha-fork-pr-workflow-approval`, distinct from
+  the SHA-pinning carve-out (`KE-gha-sha-pin-policy-carveout`). See
+  references/github-actions.md (down-gates) and the fork-PR settings endpoints in
+  fork-pr-settings-reasoning. Pair the "find" with a fork `pull_request` that has
+  NO approval gate and reaches a write-capable transition.

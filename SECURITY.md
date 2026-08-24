@@ -128,13 +128,24 @@ re-observes affected findings rather than silently resolving them.
   kernel; the running assessor can never grant itself more trust.
 - **Fail-secure** — a download with no valid, identity-matched attestation (or a
   tampered/rolled-back/frozen one) is **discarded** and the last-known-good
-  retained; expired/unavailable knowledge falls back to the in-package snapshot;
-  conflict or unknown version routes to `needs_review`. Never fetch-then-trust.
+  retained; unavailable knowledge falls back to the in-package snapshot; a stale
+  (expired) snapshot stays usable but its down-gate facts stop driving conclusions
+  (only scrutiny-increasing facts keep driving); conflict or unknown version routes
+  to `needs_review`. Never fetch-then-trust.
+- **Integrity is necessary, not sufficient** — a matching attested pack hash proves
+  only that these are the released bytes. Before it is trusted, a snapshot must also
+  pass `validate_snapshot`: every entry schema-valid, every source's authority
+  matching the registry's classification of its URL (never the value in the pack),
+  and no secret-looking value present. This runs at install time and on the assessor
+  read path; a partially-parsed pack fails closed rather than being reasoned over.
 - **Verified drives, candidate only asks** — only verified knowledge may drive a
   conclusion; candidate knowledge may raise an investigation question but never
-  closes a chain.
-- **Secrets stay out** — secret values are never persisted to `findings.json`, and
-  secrets or private repository content never enter the learning pipeline.
+  closes a chain; a read that skips the verify-gate can surface facts but never
+  drives one.
+- **Secrets stay out** — secret values are never persisted to `findings.json` —
+  not even as a hash (a low-entropy secret is recoverable from its sha256, so a
+  secret-like injection attempt is recorded with the hash withheld) — and secrets or
+  private repository content never enter the learning pipeline.
 - **Knowledge changes re-observe** — a knowledge change never auto-resolves a
   finding; it marks dependents `requires_reverification`, which re-observes the
   actual condition.

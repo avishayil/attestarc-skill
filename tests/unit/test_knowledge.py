@@ -258,6 +258,58 @@ def test_bundled_snapshot_is_consistent(knowledge_dir):
     assert knowledge.check_consistency(entries)["consistent"] is True
 
 
+def test_contradictory_corroborated_claim_key_is_inconsistent(tmp_path):
+    """A conclusion-driving confidence is authoritative OR corroborated; two
+    contradictory *corroborated* entries must be caught, not just authoritative
+    ones (regression for the old ``== "authoritative"`` filter)."""
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [
+        _entry(id="KE-a", confidence="corroborated",
+               claim="writable", claim_key="gha.cache.default"),
+        _entry(id="KE-b", confidence="corroborated",
+               claim="read-only", claim_key="gha.cache.default"),
+    ])
+    entries, _ = knowledge.load_packs(root)
+    result = knowledge.check_consistency(entries)
+    assert result["consistent"] is False
+    assert any(c["kind"] == "contradictory-active" for c in result["conflicts"])
+
+
+# --------------------------------------------------------------------------- #
+# validate_snapshot (Workstream WS6): entries must satisfy the trust contract,
+# not merely hash-match the attested packs.
+# --------------------------------------------------------------------------- #
+def test_validate_snapshot_flags_provenance_mismatch(knowledge_dir):
+    import knowledge_compile as kc
+    registry = kc.load_registry(knowledge_dir)
+    # docs.github.com is vendor-docs / 100; declaring 90 is a mismatch the
+    # registry reclassification must catch (the shipped-bootstrap drift class).
+    bad = _entry(id="KE-bad", sources=[{"publisher": "GitHub", "authority": 90,
+                 "type": "vendor-docs", "url": "https://docs.github.com/x"}])
+    result = knowledge.validate_snapshot([bad], registry)
+    assert result["valid"] is False
+    assert any(v["kind"] == "provenance-mismatch"
+               and v["field"] == "authority" for v in result["violations"])
+
+
+def test_validate_snapshot_flags_unallowed_source(knowledge_dir):
+    import knowledge_compile as kc
+    registry = kc.load_registry(knowledge_dir)
+    bad = _entry(id="KE-web", sources=[{"url": "https://evil.example/x"}])
+    result = knowledge.validate_snapshot([bad], registry)
+    assert result["valid"] is False
+    assert any(v["kind"] == "source-not-allowed" for v in result["violations"])
+
+
+def test_validate_snapshot_passes_bundled_snapshot(knowledge_dir):
+    """The shipped snapshot must obey its own trust contract (regression guard
+    for the two corrected checkout provenance entries)."""
+    import knowledge_compile as kc
+    entries, _ = knowledge.load_packs(knowledge_dir)
+    result = knowledge.validate_snapshot(entries, kc.load_registry(knowledge_dir))
+    assert result["valid"] is True, result["violations"]
+
+
 # --------------------------------------------------------------------------- #
 # open_verified (Workstream B): the verify-gated assessor read path.
 # --------------------------------------------------------------------------- #
@@ -274,6 +326,98 @@ def test_open_verified_marks_unverified_root_untrusted(tmp_path):
     entries, verification, _ = knowledge.open_verified(root)
     assert verification["trusted"] is False
     assert all(e.get("_untrusted") for e in entries)
+
+
+def test_open_verified_reports_freshness_separately_from_trust(knowledge_dir):
+    """A bundled snapshot stays trusted past its manifest expiry (last-known-good
+    floor) but is reported not-fresh, so the assessor can downgrade stale
+    down-gate facts."""
+    _, fresh_v, _ = knowledge.open_verified(knowledge_dir, now="2026-09-01")
+    assert fresh_v["trusted"] is True and fresh_v["fresh"] is True
+    _, stale_v, _ = knowledge.open_verified(knowledge_dir, now="2026-12-01")
+    assert stale_v["trusted"] is True and stale_v["fresh"] is False
+
+
+def test_open_verified_parse_partial_is_inconsistent(tmp_path):
+    """A partially-parsed pack is a partially-consumed verified set: the snapshot
+    must fail closed rather than silently reason over the lines that parsed."""
+    root = str(tmp_path)
+    boot = os.path.join(root, "bootstrap")
+    os.makedirs(boot)
+    with open(os.path.join(boot, "p.jsonl"), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(_entry(id="KE-ok")) + "\n")
+        fh.write("{ this is not json\n")
+    _, _, consistency = knowledge.open_verified(root)
+    assert consistency["consistent"] is False
+    assert any(c.get("kind") == "parse-partial" for c in consistency["conflicts"])
+
+
+def test_open_verified_invalid_provenance_is_inconsistent(tmp_path, knowledge_dir):
+    """An entry whose declared authority disagrees with the registry makes the
+    whole set untrusted, even if the bytes hash-match (they cannot here, but the
+    snapshot-validation gate is independent of attestation)."""
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [
+        _entry(id="KE-bad", sources=[{"publisher": "GitHub", "authority": 90,
+               "type": "vendor-docs", "url": "https://docs.github.com/x"}]),
+    ])
+    entries, _, consistency = knowledge.open_verified(root)
+    assert consistency["consistent"] is False
+    assert any(c.get("kind") == "snapshot-invalid" for c in consistency["conflicts"])
+    assert all(e.get("_untrusted") for e in entries)
+
+
+# --------------------------------------------------------------------------- #
+# Freshness dimension (Workstream WS6): a stale snapshot must not let a down-gate
+# fact suppress a finding, but a risk-increasing fact may still drive.
+# --------------------------------------------------------------------------- #
+def test_apply_freshness_downgrades_stale_mitigation_only():
+    hits = [
+        {"id": "KE-m", "effect": "mitigation", "drives_conclusion": True},
+        {"id": "KE-n", "effect": "neutral", "drives_conclusion": True},
+        {"id": "KE-r", "effect": "risk-increasing", "drives_conclusion": True},
+        {"id": "KE-d", "drives_conclusion": True},  # effect absent -> neutral
+    ]
+    knowledge.apply_freshness(hits, fresh=False)
+    by = {h["id"]: h for h in hits}
+    assert by["KE-m"]["drives_conclusion"] is False
+    assert by["KE-n"]["drives_conclusion"] is False
+    assert by["KE-d"]["drives_conclusion"] is False
+    assert by["KE-r"]["drives_conclusion"] is True  # scrutiny-increasing survives
+    assert by["KE-m"]["freshness"] == "stale-downgraded"
+
+
+def test_apply_freshness_leaves_fresh_snapshot_untouched():
+    hits = [{"id": "KE-m", "effect": "mitigation", "drives_conclusion": True}]
+    knowledge.apply_freshness(hits, fresh=True)
+    assert hits[0]["drives_conclusion"] is True
+    # unknown freshness (e.g. --allow-unverified) must not trigger a downgrade
+    knowledge.apply_freshness(hits, fresh=None)
+    assert hits[0]["drives_conclusion"] is True
+
+
+def test_effect_enum_validated_by_snapshot(knowledge_dir):
+    import knowledge_compile as kc
+    registry = kc.load_registry(knowledge_dir)
+    bad = _entry(id="KE-bad", effect="lower-risk")  # not in the enum
+    result = knowledge.validate_snapshot([bad], registry)
+    assert result["valid"] is False
+    assert any(v["kind"] == "bad-enum" and v["field"] == "effect"
+               for v in result["violations"])
+
+
+def test_allow_unverified_never_drives_conclusion(tmp_path, capsys):
+    """``--allow-unverified`` skips the gate (``trusted:None``); it must surface
+    facts for investigation but never leave a conclusion standing."""
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [_entry(id="KE-a")])
+    rc = knowledge.main(["lookup", "--subject", "cache-write",
+                         "--allow-unverified", "--knowledge-root", root])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["verification"]["trusted"] is None
+    assert out["hits"], "the fact should still be surfaced"
+    assert all(h["drives_conclusion"] is False for h in out["hits"])
 
 
 # --------------------------------------------------------------------------- #

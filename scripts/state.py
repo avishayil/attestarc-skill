@@ -449,7 +449,7 @@ _RISK_ACCEPTANCE_KEYS = frozenset({
 })
 _SAFETY_EVENT_KEYS = frozenset({
     "source", "detected_at", "location", "excerpt", "content_hash",
-    "action_taken", "extensions",
+    "content_redacted", "action_taken", "extensions",
 })
 _ID_RE = re.compile(r"AA-[A-Z]{2,4}-[0-9A-F]{8}")
 
@@ -1106,9 +1106,11 @@ def cmd_record_safety_event(args) -> int:
     This is an *assessor-safety event*, structurally separate from findings: it
     is never a security finding about the assessed repository. By default only
     metadata plus a ``content_hash`` (sha256 of the injected text) is stored, so
-    the attempt is fingerprinted without persisting the raw payload. A raw
-    ``excerpt`` is kept only when explicitly supplied as already-sanitized
-    (secret-scanned, capped) and MUST NOT be acted on.
+    the attempt is fingerprinted without persisting the raw payload — but when the
+    text looks like a secret the hash is withheld too (a hash is not a safe home
+    for a low-entropy secret), leaving only a redaction marker. A raw ``excerpt``
+    is kept only when explicitly supplied as already-sanitized (secret-scanned,
+    capped) and MUST NOT be acted on.
 
     Two input styles:
 
@@ -1145,12 +1147,19 @@ def cmd_record_safety_event(args) -> int:
 
     # Fingerprint the injected text (raw ``content`` preferred, else the
     # sanitized ``excerpt``) so the attempt is recorded even when we do not
-    # persist the raw payload. Hashing is one-way, so hashing a secret is safe.
+    # persist the raw payload. Hashing is one-way, but a hash is NOT a safe home
+    # for a secret: a low-entropy or short secret is recoverable from its sha256
+    # by brute force / rainbow table. So if the text to fingerprint looks like a
+    # secret, withhold the hash entirely and record only that a secret-like value
+    # was seen — location/source metadata still make the attempt auditable.
     hash_input = content if content is not None else excerpt
     if hash_input is not None and str(hash_input):
-        event["content_hash"] = hashlib.sha256(
-            str(hash_input).encode("utf-8")
-        ).hexdigest()
+        if looks_like_secret(str(hash_input)):
+            event["content_redacted"] = "secret-like; hash withheld"
+        else:
+            event["content_hash"] = hashlib.sha256(
+                str(hash_input).encode("utf-8")
+            ).hexdigest()
 
     # Persist a raw excerpt ONLY when explicitly supplied as already-sanitized.
     if excerpt:

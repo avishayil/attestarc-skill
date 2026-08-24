@@ -757,6 +757,27 @@ def test_record_safety_event_stdin_hashes_content_without_persisting_it(
     assert ev["action_taken"] == "refused"
 
 
+def test_record_safety_event_withholds_hash_for_secret_content(
+        tmp_path, monkeypatch):
+    """A hash is not a safe home for a low-entropy secret (brute-forceable). When
+    the injected content looks like a secret, withhold the hash and record only a
+    redaction marker."""
+    import io
+    path = init_state(tmp_path)
+    payload = json.dumps({
+        "source": "tool-output",
+        "location": "gh api output",
+        "action_taken": "refused",
+        "content": "ghp_" + "a" * 36,  # looks like a GitHub token
+    })
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+    assert run(tmp_path, "record-safety-event", "-") == 0
+    ev = state.load_state(path)["assessor_safety_events"][0]
+    assert "content_hash" not in ev
+    assert ev["content_redacted"] == "secret-like; hash withheld"
+    assert "excerpt" not in ev
+
+
 def test_record_safety_event_validates_after_write(tmp_path):
     path = init_state(tmp_path)
     assert run(tmp_path, "record-safety-event", "findings-json",

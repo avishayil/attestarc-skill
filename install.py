@@ -147,6 +147,47 @@ def verify_bundled_knowledge(source: str) -> None:
                 f"bundled pack {name} does not match manifest sha256/size; "
                 f"refusing to install a tampered knowledge snapshot")
 
+    # Beyond byte integrity, confirm the snapshot obeys its own trust contract:
+    # every entry schema-valid, each source's provenance matching the registry's
+    # reclassification of its URL, no secret-looking values, and the set coherent.
+    # A pack can hash-match the manifest yet still violate policy (an entry
+    # claiming a higher authority tier than the registry assigns its URL); we
+    # refuse to ship such a snapshot rather than copy it out as "trusted".
+    _validate_bundled_snapshot(source, kroot)
+
+
+def _validate_bundled_snapshot(source: str, kroot: str) -> None:
+    """Run the deterministic snapshot-validation gate (scripts/knowledge.py) over
+    the source's own packs, using the source's own registry as the classification
+    root of trust. Import the helpers from the source being installed."""
+    scripts_dir = os.path.join(source, "scripts")
+    inserted = scripts_dir not in sys.path
+    if inserted:
+        sys.path.insert(0, scripts_dir)
+    try:
+        import knowledge
+        import knowledge_compile
+        entries, _ = knowledge.load_packs(kroot)
+        registry = knowledge_compile.load_registry(kroot)
+        result = knowledge.validate_snapshot(entries, registry)
+        consistency = knowledge.check_consistency(entries)
+    except InstallError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — an unvalidatable snapshot is not trusted
+        raise InstallError(
+            f"cannot validate the bundled knowledge snapshot: {exc}")
+    finally:
+        if inserted and scripts_dir in sys.path:
+            sys.path.remove(scripts_dir)
+    if not result.get("valid"):
+        raise InstallError(
+            "bundled knowledge snapshot violates its own trust contract "
+            f"(schema/provenance/secret): {result['violations']}")
+    if not consistency.get("consistent"):
+        raise InstallError(
+            "bundled knowledge snapshot is internally inconsistent: "
+            f"{consistency['conflicts']}")
+
 
 def validate_source(source: str) -> str:
     """Ensure the source skill is well-formed; return its version string."""

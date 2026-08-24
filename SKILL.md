@@ -123,7 +123,12 @@ the relevant entry inline as `KE-…`.
   state records it was attested). If it does not trust, treat platform facts as
   unavailable and route affected chains to `needs_review`. The `lookup`/`explain`
   path is verify-gated: `knowledge.py open_verified` returns nothing that can drive
-  a conclusion unless verification passes. The assessor never runs the network
+  a conclusion unless verification passes. "Trust" here is more than byte integrity —
+  the snapshot must also pass `validate_snapshot` (every entry schema-valid, each
+  source's authority matching the registry's classification of its URL, no
+  secret-looking value) and `check_consistency`, and a pack that only partially
+  parses fails closed. A `--allow-unverified` read (tooling only) surfaces facts but
+  drives no conclusion. The assessor never runs the network
   attestation check — that is the Updater's job; the assessor verifies the installed
   snapshot against recorded client state:
 
@@ -339,8 +344,8 @@ platform mitigations as reachability **down-gates**, not findings: an enforced
 **require-SHA-pinning** Actions policy makes a movable step-level Action `uses:`
 ref not reachable the usual way — but it does **not** apply to reusable-workflow
 refs (`job.uses: …/x.yml@v3`), so a mutable reusable-workflow ref stays a live
-finding even under the policy; **Workflow Execution Protections** and an
-approval-gated fork-PR policy gate whether an untrusted trigger can run at all. When you cannot read
+finding even under the policy; a **fork-PR workflow-approval gate** decides
+whether an untrusted trigger can run at all. When you cannot read
 these server-side, record the affected transition as `needs_review` with an
 `evidence_gap` — never assume a mitigation is present, and never turn its absence
 into a finding. Do **not** ask the

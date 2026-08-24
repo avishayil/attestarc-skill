@@ -369,7 +369,11 @@
         "content_hash": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$",
-          "description": "sha256 of the injected text, recorded so the attempt is fingerprinted even when the raw payload is not persisted. Recorded by default. Optional."
+          "description": "sha256 of the injected text, recorded so the attempt is fingerprinted even when the raw payload is not persisted. Recorded by default, but WITHHELD when the text looks like a secret (a hash is not a safe home for a low-entropy secret); content_redacted is set instead. Optional."
+        },
+        "content_redacted": {
+          "type": "string",
+          "description": "Set in place of content_hash when the injected text looks like a secret value: the hash is withheld (a short/low-entropy secret is recoverable from its sha256) and only this marker is stored, so the attempt stays auditable via source/location without persisting a brute-forceable fingerprint. Optional."
         },
         "excerpt": {
           "type": "string",

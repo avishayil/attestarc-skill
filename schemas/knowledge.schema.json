@@ -69,6 +69,11 @@
       "enum": ["authoritative", "corroborated", "candidate"],
       "description": "'authoritative': single authoritative source (registry authority >= 90); 'corroborated': multiple independent sources agree; 'candidate': unverified — MUST NOT drive a conclusion."
     },
+    "effect": {
+      "type": "string",
+      "enum": ["mitigation", "risk-increasing", "neutral"],
+      "description": "The direction the claim moves an assessment when it drives a conclusion. 'mitigation': it lowers apparent risk / establishes a down-gate (e.g. a default is read-only, a checkout refuses fork code). 'risk-increasing': it raises apparent risk (e.g. a trigger carries secrets). 'neutral' (default when absent): neither. Used by the freshness gate: when the installed snapshot is stale (past its manifest expiry) a 'mitigation' or 'neutral' fact MUST NOT drive a conclusion (a stale down-gate could wrongly suppress a finding — route to needs_review), while a 'risk-increasing' fact may remain conclusion-driving (failing toward scrutiny is safe)."
+    },
     "sources": {
       "type": "array",
       "minItems": 1,
