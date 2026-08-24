@@ -19,45 +19,226 @@
   <link rel="stylesheet" href="styles.css">
 
   <style>
-    /* Scoped to the security page: trust-zone stack + verify-flow columns.
-       Uses the same design tokens as styles.css — no new palette. */
-    .zone-stack { display: grid; gap: 0.9rem; margin-top: 1.5rem; }
+    /* Scoped to the security page. Uses the same design tokens as styles.css —
+       no new palette (sky = trusted/routed, green = pass/safe, amber = stop). */
+
+    .back-link { font-family: var(--font-mono); font-size: 0.85rem; }
+    .section-lede { max-width: 60ch; }
+
+    /* ── Hero equation: "poison knowledge = compromise logic" ───────────── */
+    .equation {
+      display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.9rem;
+      margin: 2rem 0 0.5rem;
+    }
+    .eq-box {
+      flex: 1 1 240px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.15rem 1.25rem;
+      display: flex; gap: 0.8rem; align-items: flex-start;
+    }
+    .eq-box.danger { border-color: #7f3d3d; }
+    .eq-box .ico { flex: none; color: var(--warn); margin-top: 2px; }
+    .eq-box .ico svg { width: 26px; height: 26px; display: block; }
+    .eq-box b { display: block; font-family: var(--font-mono); font-size: 0.95rem; color: var(--fg); }
+    .eq-box span { color: var(--fg-muted); font-size: 0.9rem; }
+    .eq-op {
+      flex: 0 0 auto; align-self: center; font-family: var(--font-mono);
+      font-size: 1.8rem; font-weight: 700; color: var(--warn);
+    }
+
+    /* ── Callout: the primary rule ──────────────────────────────────────── */
+    .callout {
+      margin-top: 2rem; background: var(--surface-2);
+      border: 1px solid var(--border-strong); border-left: 4px solid var(--accent);
+      border-radius: var(--radius); padding: 1.15rem 1.35rem;
+    }
+    .callout .tag {
+      font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 0.4rem;
+    }
+    .callout p { margin: 0; color: var(--fg); }
+
+    /* ── Trust zones ────────────────────────────────────────────────────── */
+    .zone-stack { display: grid; gap: 0.75rem; margin-top: 1.5rem; }
     .zone {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-left: 4px solid var(--accent);
-      border-radius: var(--radius);
-      padding: 1.2rem 1.35rem;
+      position: relative; background: var(--surface); border: 1px solid var(--border);
+      border-left: 4px solid var(--accent); border-radius: var(--radius);
+      padding: 1.1rem 1.25rem; display: flex; gap: 1rem; align-items: flex-start;
     }
     .zone.candidate { border-left-color: var(--warn); }
+    .zone .z-ico { flex: none; color: var(--accent); margin-top: 3px; }
+    .zone.candidate .z-ico { color: var(--warn); }
+    .zone .z-ico svg { width: 28px; height: 28px; display: block; }
+    .zone .z-body { min-width: 0; }
     .zone .tag {
-      font-family: var(--font-mono);
-      font-size: 0.72rem;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--accent);
-      display: block;
-      margin-bottom: 0.35rem;
+      font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 0.25rem;
     }
     .zone.candidate .tag { color: var(--warn); }
-    .zone h3 { margin: 0 0 0.4rem; }
-    .zone p { color: var(--fg-muted); margin: 0.2rem 0 0; font-size: 0.97rem; }
-    .zone .rule { color: var(--fg); font-size: 0.95rem; margin-top: 0.55rem; }
+    .zone h3 { margin: 0 0 0.3rem; }
+    .zone p { color: var(--fg-muted); margin: 0; font-size: 0.94rem; }
+    .zone .rule { color: var(--fg); font-size: 0.9rem; margin-top: 0.5rem; }
+    .gate-badge {
+      display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+      font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--accent);
+      border: 1px dashed var(--border-strong); border-radius: 8px;
+      padding: 0.45rem 0.8rem; margin: 0.1rem 0;
+    }
+    .gate-badge svg { width: 16px; height: 16px; }
 
-    /* Two-column verify flow: Updater path vs Assessor path */
+    /* ── Principals: 3 cards ────────────────────────────────────────────── */
+    .principals { display: grid; gap: 1rem; margin-top: 1.5rem; grid-template-columns: 1fr; }
+    @media (min-width: 720px) { .principals { grid-template-columns: repeat(3, 1fr); } }
+    .principal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.25rem;
+    }
+    .principal .p-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.15rem; }
+    .principal .p-head .ico { color: var(--accent); flex: none; }
+    .principal .p-head .ico svg { width: 22px; height: 22px; display: block; }
+    .principal .p-head h3 { margin: 0; font-size: 1.05rem; }
+    .principal .cmd { font-family: var(--font-mono); font-size: 0.8rem; color: var(--fg-muted); margin: 0 0 0.9rem; }
+    .caplist { list-style: none; margin: 0; padding: 0; font-size: 0.9rem; }
+    .caplist li { display: flex; gap: 0.5rem; align-items: flex-start; margin-bottom: 0.4rem; color: var(--fg); }
+    .caplist li svg { width: 16px; height: 16px; flex: none; margin-top: 3px; }
+    .caplist li.may svg { color: var(--ok); }
+    .caplist li.no svg { color: var(--warn); }
+    .caplist li.no { color: var(--fg-muted); }
+
+    /* ── Install / verify pipeline ──────────────────────────────────────── */
+    .pipeline {
+      display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.5rem;
+      margin-top: 1.5rem;
+    }
+    .pipe-step {
+      flex: 1 1 130px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 0.8rem 0.9rem;
+    }
+    .pipe-step .n {
+      font-family: var(--font-mono); font-size: 0.72rem; color: var(--accent);
+      display: block; margin-bottom: 0.3rem;
+    }
+    .pipe-step b { font-size: 0.9rem; color: var(--fg); display: block; }
+    .pipe-step span { font-size: 0.8rem; color: var(--fg-muted); }
+    .pipe-arrow { align-self: center; color: var(--accent); font-family: var(--font-mono); font-weight: 700; }
+    .pipe-note {
+      margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.82rem; color: var(--fg-muted);
+    }
+    .pipe-note .discard { color: var(--warn); }
+
+    /* Two verify paths */
     .flow-cols { display: grid; gap: 1rem; margin-top: 1.5rem; }
     @media (min-width: 820px) { .flow-cols { grid-template-columns: 1fr 1fr; } }
     .flow { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.2rem 1.35rem; }
-    .flow h3 { font-size: 1.05rem; }
-    .flow ol { margin: 0.6rem 0 0; padding-left: 1.2rem; color: var(--fg-muted); font-size: 0.95rem; }
+    .flow .f-head { display: flex; align-items: center; gap: 0.6rem; }
+    .flow .f-head .ico { color: var(--accent); flex: none; }
+    .flow .f-head .ico svg { width: 20px; height: 20px; display: block; }
+    .flow h3 { font-size: 1.02rem; margin: 0; }
+    .flow ol { margin: 0.7rem 0 0; padding-left: 1.2rem; color: var(--fg-muted); font-size: 0.92rem; }
     .flow ol li { margin-bottom: 0.4rem; }
-    .flow .verdict {
-      margin-top: 0.9rem; font-family: var(--font-mono); font-size: 0.82rem;
-      border-top: 1px dashed var(--border-strong); padding-top: 0.7rem;
-    }
+    .flow .verdict { margin-top: 0.9rem; font-family: var(--font-mono); font-size: 0.8rem; border-top: 1px dashed var(--border-strong); padding-top: 0.7rem; }
     .flow .discard { color: var(--warn); }
     .flow .trust { color: var(--ok); }
-    .back-link { font-family: var(--font-mono); font-size: 0.85rem; }
+
+    /* Chip rows (defends-against, response legend) */
+    .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+    .chip {
+      font-family: var(--font-mono); font-size: 0.78rem; padding: 0.3rem 0.7rem;
+      border-radius: 999px; border: 1px solid var(--border-strong);
+      color: var(--fg); display: inline-flex; align-items: center; gap: 0.4rem;
+    }
+    .chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+    .chip.ok::before { background: var(--ok); }
+    .chip.route::before { background: var(--accent); }
+
+    /* Install package: 2 cards */
+    .pkg-cards { display: grid; gap: 1rem; margin-top: 1.5rem; grid-template-columns: 1fr; }
+    @media (min-width: 720px) { .pkg-cards { grid-template-columns: 1fr 1fr; } }
+    .pkg {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 1.2rem 1.3rem;
+    }
+    .pkg .badge {
+      display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--font-mono);
+      font-size: 0.74rem; letter-spacing: 0.06em; text-transform: uppercase;
+      padding: 0.25rem 0.6rem; border-radius: 6px; margin-bottom: 0.6rem;
+    }
+    .pkg .badge svg { width: 14px; height: 14px; }
+    .pkg .badge.no { color: var(--warn); border: 1px solid var(--warn); }
+    .pkg .badge.yes { color: var(--ok); border: 1px solid var(--ok); }
+    .pkg h3 { font-size: 1rem; margin: 0 0 0.4rem; }
+    .pkg p { color: var(--fg-muted); font-size: 0.9rem; margin: 0; }
+
+    /* Fail-secure: response chip + compact rows */
+    .legend { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 1.25rem 0; }
+    .resp {
+      font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
+      padding: 0.15rem 0.55rem; border-radius: 6px; white-space: nowrap;
+      border: 1px solid var(--border-strong); color: var(--fg);
+    }
+    .resp.stop { color: var(--warn); border-color: var(--warn); }
+    .resp.safe { color: var(--ok); border-color: var(--ok); }
+    .resp.route { color: var(--accent); border-color: var(--accent); }
+    table td .resp { display: inline-block; }
+    .fs-table td:first-child { color: var(--fg); }
+    .fs-table td:last-child { color: var(--fg-muted); font-size: 0.9rem; }
+
+    /* Kill switch diagram */
+    .killswitch {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+      margin-top: 1.5rem; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.1rem 1.25rem;
+    }
+    .ks-step { display: flex; align-items: center; gap: 0.55rem; font-size: 0.88rem; color: var(--fg); }
+    .ks-step .ico { color: var(--accent); flex: none; }
+    .ks-step .ico svg { width: 20px; height: 20px; display: block; }
+    .ks-arrow { color: var(--accent); font-family: var(--font-mono); font-weight: 700; }
+
+    /* ── Architecture map: two pipelines feed a trusted core ────────────── */
+    .archmap { display: grid; gap: 0.75rem; margin-top: 1.5rem; grid-template-columns: 1fr; }
+    @media (min-width: 860px) { .archmap { grid-template-columns: 1fr auto 1fr; align-items: center; } }
+    .am-col { display: flex; flex-direction: column; gap: 0.5rem; }
+    .am-kicker { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-muted); }
+    .am-box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem 1rem; }
+    .am-box b { font-family: var(--font-mono); font-size: 0.9rem; color: var(--fg); display: block; }
+    .am-box small { color: var(--fg-muted); font-size: 0.8rem; }
+    .am-box.warn { border-left: 3px solid var(--warn); }
+    .am-box.core { border: 1px solid var(--accent); background: var(--surface-2); text-align: center; }
+    .am-box.core b { color: var(--accent-contrast); font-size: 1rem; }
+    .am-flow { font-family: var(--font-mono); font-size: 0.76rem; color: var(--accent); display: flex; align-items: center; gap: 0.4rem; }
+    .am-flow svg { width: 15px; height: 15px; flex: none; }
+    .am-out {
+      margin-top: 0.75rem; background: var(--surface); border: 1px solid var(--border);
+      border-left: 3px solid var(--ok); border-radius: 12px; padding: 0.85rem 1rem;
+      font-family: var(--font-mono); font-size: 0.85rem; color: var(--fg);
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+    }
+    .am-out .sep { color: var(--accent); font-weight: 700; }
+    .am-out small { color: var(--fg-muted); font-family: var(--font-sans); }
+
+    /* ── Workflow stepper: components are the process, text is a hint ───── */
+    .wf { margin-top: 1.25rem; display: grid; gap: 0.5rem; }
+    .wf-step { display: flex; gap: 0.9rem; align-items: flex-start; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.85rem 1.05rem; }
+    .wf-step .num { flex: none; width: 2rem; height: 2rem; border-radius: 8px; display: grid; place-items: center; font-family: var(--font-mono); font-size: 0.82rem; color: var(--accent); border: 1px solid var(--border-strong); }
+    .wf-step .body { min-width: 0; }
+    .wf-step b { font-family: var(--font-mono); font-size: 0.92rem; color: var(--fg); display: block; }
+    .wf-step .hint { color: var(--fg-muted); font-size: 0.85rem; margin: 0.2rem 0 0; max-width: 60ch; }
+    .wf-step .hint code, .wf-gwrap .hint code { font-size: 0.82em; }
+    .wf-step.start { border-left: 3px solid var(--warn); }
+    .wf-step.end { border-left: 3px solid var(--ok); }
+    .wf-gwrap { display: flex; flex-direction: column; align-items: center; gap: 0.35rem; text-align: center; }
+    .wf-gate { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--accent); border: 1px dashed var(--border-strong); border-radius: 999px; padding: 0.4rem 0.9rem; }
+    .wf-gate svg { width: 15px; height: 15px; flex: none; }
+    .wf-gwrap .hint { color: var(--fg-muted); font-size: 0.8rem; margin: 0; max-width: 56ch; }
+    .wf-arrow { display: flex; justify-content: center; color: var(--accent); line-height: 0; }
+    .wf-arrow svg { width: 20px; height: 20px; }
+    .wf-branch { display: grid; gap: 0.5rem; grid-template-columns: 1fr; }
+    @media (min-width: 640px) { .wf-branch { grid-template-columns: 1fr 1fr; } }
+    .wf-branch .wf-step { border-left: 3px solid var(--accent); }
+    .wf-branch .num { font-size: 0.66rem; }
+    .wf-h3 { display: flex; align-items: center; gap: 0.6rem; margin-top: 2.5rem; flex-wrap: wrap; }
+    .wf-h3 h3 { margin: 0; font-size: 1.05rem; }
+    .wf-h3 .badge { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.15rem 0.55rem; }
   </style>
 </head>
 <body>
@@ -71,13 +252,32 @@
         <p class="eyebrow"><a class="back-link" href="index.html">← AttestArc</a> · Security model</p>
         <h1 id="intro-h">A security model for a skill that learns</h1>
         <p class="lede">AttestArc consults versioned platform facts — a <em>knowledge plane</em> — that
-          change what a finding means. The moment a tool can learn facts that alter verdicts,
-          <strong>poisoning its knowledge becomes equivalent to compromising its logic.</strong></p>
-        <p class="muted">Teaching AttestArc that a dangerous pattern is “safe” would suppress a real
-          finding without ever touching the target repository. So AttestArc treats its knowledge plane as
+          change what a finding means. Once a tool can learn facts that alter verdicts, one equation
+          governs everything:</p>
+
+        <div class="equation reveal" role="img"
+             aria-label="Poisoning AttestArc's knowledge is equivalent to compromising its logic: teaching it that a dangerous pattern is safe would suppress a real finding without ever touching the target repository.">
+          <div class="eq-box danger">
+            <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+            <div><b>Poison the knowledge</b><span>Teach it a dangerous pattern is “safe.”</span></div>
+          </div>
+          <div class="eq-op" aria-hidden="true">=</div>
+          <div class="eq-box danger">
+            <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><line x1="9" y1="12" x2="15" y2="12"/></svg></span>
+            <div><b>Compromise the logic</b><span>Suppress a real finding — no repo access needed.</span></div>
+          </div>
+        </div>
+
+        <p class="muted section-lede">So AttestArc treats its knowledge plane as
           <strong>security-critical code</strong>, and the pipeline that produces it as a software supply
-          chain to be defended. This page explains, transparently, how that works — and what is novel
-          about it.</p>
+          chain to be defended.</p>
+
+        <div class="callout reveal">
+          <span class="tag">The primary rule</span>
+          <p>Nothing learned at runtime may modify the trusted security brain. AI may <em>discover</em>,
+            <em>propose</em>, and propose changes to itself — but a <strong>deterministic</strong> trust
+            policy decides what becomes trusted, and the running assessor can never grant itself more trust.</p>
+        </div>
 
         <div class="cta-row">
           <a class="btn btn-primary" href="https://github.com/avishayil/attestarc-skill/blob/main/THREAT_MODEL.md" target="_blank" rel="noopener">
@@ -89,12 +289,6 @@
             View on GitHub
           </a>
         </div>
-
-        <p class="muted reveal" style="margin-top:1.75rem"><strong>The primary rule.</strong>
-          Nothing learned at runtime may directly modify the trusted security brain. AI may discover
-          knowledge, propose knowledge, and propose changes to itself — but a <em>deterministic</em>
-          trust policy decides what becomes trusted, and the running assessor can never grant itself
-          more trust.</p>
       </div>
     </section>
 
@@ -102,45 +296,55 @@
     <section aria-labelledby="zones-h">
       <div class="container">
         <h2 id="zones-h" class="reveal">Three trust zones</h2>
-        <p class="muted reveal">AttestArc's reasoning corpus is partitioned by trust. The
-          kernel/knowledge boundary is enforced in <strong>code</strong> (the assessor reads knowledge
-          only through a verify-gate, its helpers contain no network code, the kernel is not writable
-          during an assessment) and in <strong>process</strong> (all changes land via reviewed PRs into a
-          protected <code>main</code>, gated by the eval corpus and SHA-pinned Actions; the attest+publish
-          job is confined to a protected <code>knowledge-release</code> environment restricted to signed,
-          immutable <code>knowledge-v*</code> tags; root-of-trust files
-          additionally call for two-party review — enforced where a second reviewer is available,
-          aspirational on a single-maintainer repo).</p>
+        <p class="muted reveal section-lede">The reasoning corpus is partitioned by trust — enforced in
+          <strong>code</strong> (verify-gated reads, no network in the assessor, a non-writable kernel) and
+          <strong>process</strong> (reviewed PRs into a protected <code>main</code>, eval-gated,
+          SHA-pinned Actions).</p>
 
         <div class="zone-stack reveal" role="img"
-             aria-label="Three stacked trust zones: Kernel (highly trusted, never runtime-mutated) above Verified Knowledge (trusted for reasoning after verification) above Candidate Knowledge (untrusted; shapes questions only).">
+             aria-label="Three stacked trust zones from most to least trusted. Kernel: highly trusted, always loaded, never runtime-mutated. A verify-gate sits between the kernel and verified knowledge. Verified knowledge: trusted for reasoning only after the verification chain passes. A second gate — the deterministic promotion policy — sits between candidate and verified knowledge. Candidate knowledge: untrusted; may shape investigation questions but must not change a conclusion.">
           <div class="zone">
-            <span class="tag">Kernel · highly trusted · always loaded</span>
-            <h3>The reasoning kernel</h3>
-            <p><code>SKILL.md</code>, <code>core/</code> (methodology, severity, evidence, agent-safety,
-              promotion-policy…), the verification helpers, the schemas, and the eval corpus.</p>
-            <p class="rule">Changes only through reviewed PRs, gated by the eval corpus; root-of-trust
-              files call for two-party review (enforced where a second reviewer exists). <strong>Never
-              writable by the running skill during an assessment.</strong></p>
+            <span class="z-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+            <div class="z-body">
+              <span class="tag">Kernel · always loaded</span>
+              <h3>The reasoning kernel</h3>
+              <p><code>SKILL.md</code>, <code>core/</code>, the verification helpers, the schemas, the eval corpus.</p>
+              <p class="rule">Changes only through reviewed, eval-gated PRs; root-of-trust files call for two
+                parties. <strong>Never writable by the running skill during an assessment.</strong></p>
+            </div>
           </div>
+
+          <div class="gate-badge" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V5l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+            verify-gate
+          </div>
+
           <div class="zone">
-            <span class="tag">Verified knowledge · trusted for reasoning</span>
-            <h3>The knowledge plane</h3>
-            <p>Attested, versioned, temporal, provenance-backed packs (<code>knowledge/</code>). Refreshed
-              by the Updater, never by the Assessor.</p>
-            <p class="rule">Drives a conclusion <strong>only after the verification chain passes</strong>;
-              the in-package snapshot is bootstrap-trusted because it rode in with the skill package
-              (whose own authenticity is checked at install time by the attested-tarball path, below).</p>
+            <span class="z-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg></span>
+            <div class="z-body">
+              <span class="tag">Verified knowledge · trusted for reasoning</span>
+              <h3>The knowledge plane</h3>
+              <p>Attested, versioned, provenance-backed packs (<code>knowledge/</code>). Refreshed by the
+                Updater, never the Assessor.</p>
+              <p class="rule">Drives a conclusion <strong>only after the verification chain passes</strong>.</p>
+            </div>
           </div>
+
+          <div class="gate-badge" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>
+            deterministic promotion policy
+          </div>
+
           <div class="zone candidate">
-            <span class="tag">Candidate knowledge · untrusted</span>
-            <h3>Everything not yet verified</h3>
-            <p>LLM extractions, web and changelog deltas, researcher claims, user feedback, conflicting
-              evidence. The model produces only a <em>candidate</em> (no <code>status</code>/<code>confidence</code>,
-              no self-declared source authority); those trusted fields are assigned by promotion, never the model.</p>
-            <p class="rule">MAY influence which <em>investigation questions</em> are asked. <strong>MUST
-              NOT change a security conclusion.</strong> Becomes verified only by passing deterministic
-              promotion policy.</p>
+            <span class="z-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v6.5L4.8 18a2 2 0 0 0 1.7 3h11a2 2 0 0 0 1.7-3L14 8.5V2"/><path d="M8.5 2h7"/><path d="M7 15h10"/></svg></span>
+            <div class="z-body">
+              <span class="tag">Candidate knowledge · untrusted</span>
+              <h3>Everything not yet verified</h3>
+              <p>LLM extractions, web/changelog deltas, researcher and user claims. The model produces only a
+                <em>candidate</em> — no self-declared <code>status</code>, <code>confidence</code>, or authority.</p>
+              <p class="rule">MAY shape which <em>questions</em> get asked. <strong>MUST NOT change a
+                conclusion.</strong></p>
+            </div>
           </div>
         </div>
       </div>
@@ -150,33 +354,52 @@
     <section aria-labelledby="principals-h">
       <div class="container">
         <h2 id="principals-h" class="reveal">Three principals</h2>
-        <p class="muted reveal">The assessment path and the network-facing update path are separate
-          principals with disjoint capabilities — <strong>skill modes plus a development workflow</strong>,
-          not a hosted multi-agent runtime. The separation is <em>structural and documented</em>: the
-          assessor path simply contains no fetch step, and ingestion lives upstream. The Assessor and
-          Updater are separated precisely so a malicious repository cannot turn the assessment path into a
-          network-egress or exfiltration channel.</p>
-        <div class="table-wrap reveal">
-          <table>
-            <thead><tr><th scope="col">Principal</th><th scope="col">May</th><th scope="col">MUST NOT</th></tr></thead>
-            <tbody>
-              <tr>
-                <td><strong>Assessor</strong><br><code>/attestarc</code></td>
-                <td>Read repo; read <em>verified</em> knowledge; write <code>findings.json</code></td>
-                <td>Reach the network; write kernel or knowledge; grant itself trust</td>
-              </tr>
-              <tr>
-                <td><strong>Updater</strong><br><code>/attestarc knowledge refresh</code></td>
-                <td>Read allow-listed sources over the network; write <em>candidate</em> knowledge; promote per policy</td>
-                <td>Access the target repository; write the kernel; sign/publish releases</td>
-              </tr>
-              <tr>
-                <td><strong>Evolver</strong><br><span class="muted">(dev-time)</span></td>
-                <td>Read candidates/evals; propose branch changes + evals</td>
-                <td>Write the production skill; release; modify or delete trusted evals in the same trust step</td>
-              </tr>
-            </tbody>
-          </table>
+        <p class="muted reveal section-lede">Skill modes plus a development workflow — not a hosted
+          multi-agent runtime. The assessment path and the network-facing update path are separated so a
+          malicious repository can never become an exfiltration channel.</p>
+
+        <div class="principals reveal">
+          <div class="principal">
+            <div class="p-head">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg></span>
+              <h3>Assessor</h3>
+            </div>
+            <p class="cmd">/attestarc</p>
+            <ul class="caplist">
+              <li class="may"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Read repo &amp; <em>verified</em> knowledge</li>
+              <li class="may"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Write <code>findings.json</code></li>
+              <li class="no"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Reach the network</li>
+              <li class="no"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Write kernel/knowledge or self-grant trust</li>
+            </ul>
+          </div>
+
+          <div class="principal">
+            <div class="p-head">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20Z"/></svg></span>
+              <h3>Updater</h3>
+            </div>
+            <p class="cmd">/attestarc knowledge refresh</p>
+            <ul class="caplist">
+              <li class="may"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Fetch allow-listed sources</li>
+              <li class="may"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Write <em>candidate</em> knowledge; promote per policy</li>
+              <li class="no"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Access the target repository</li>
+              <li class="no"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Write the kernel; sign/publish releases</li>
+            </ul>
+          </div>
+
+          <div class="principal">
+            <div class="p-head">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+              <h3>Evolver</h3>
+            </div>
+            <p class="cmd">dev-time</p>
+            <ul class="caplist">
+              <li class="may"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Read candidates/evals</li>
+              <li class="may"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Propose branch changes + evals</li>
+              <li class="no"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Write the production skill; release</li>
+              <li class="no"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Modify/delete trusted evals in the same step</li>
+            </ul>
+          </div>
         </div>
       </div>
     </section>
@@ -185,99 +408,103 @@
     <section aria-labelledby="flow-h">
       <div class="container">
         <h2 id="flow-h" class="reveal">Attestation-anchored updates</h2>
-        <p class="muted reveal">The root of trust for <em>knowledge bundles</em> is an
-          <strong>external anchor</strong>
-          (<code>knowledge/trust-anchor.json</code>) that ships inside the skill package and
-          lives <em>outside</em> any downloaded bundle. (The <em>package itself</em> is authenticated
-          at install time by a separate anchor — see "Installing the package" below.) It pins the
-          Sigstore build-provenance identity
-          (repo + signer workflow + the reviewed git <em>ref</em> + OIDC issuer) an official bundle must
-          have been produced under — the identity check binds the certificate's trailing <code>@&lt;ref&gt;</code>,
-          not just the workflow path, so an attestation minted from an unreviewed branch is rejected — and a
-          bundle can never declare its own trust. Verification shells out to the system
-          <code>gh attestation verify</code> (no crypto dependency of our own). There are two entry
-          points, and they are deliberately asymmetric:</p>
+        <p class="muted reveal section-lede">The root of trust is an <strong>external anchor</strong>
+          (<code>knowledge/trust-anchor.json</code>) that ships <em>outside</em> any bundle — so a bundle can
+          never declare its own trust. It pins the Sigstore build-provenance identity (repo + workflow +
+          the reviewed git <em>ref</em> + OIDC issuer). Verification shells out to
+          <code>gh attestation verify</code>.</p>
 
+        <!-- Install pipeline -->
+        <div class="pipeline reveal" role="img"
+             aria-label="Install is the single path that advances trust, in order: 1. verify the archive's own attestation before extracting; 2. safe-extract, rejecting absolute paths, dot-dot, symlinks and hardlinks and bounding member count and per-file and total uncompressed size against the bytes actually streamed, so a decompression bomb is refused before writing; 3. re-verify the staged bytes; 4. run the same semantic gate the assessor uses, validate_snapshot plus consistency plus parse-completeness; 5. atomically rename the snapshot into place; 6. only then atomically advance client state and the high-water mark. Any failure discards the download and keeps the last-known-good.">
+          <div class="pipe-step"><span class="n">1 · verify</span><b>Attest archive</b><span>before extracting anything</span></div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-step"><span class="n">2 · extract</span><b>Safe-extract</b><span>reject <code>..</code>/symlink; cap size &amp; count</span></div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-step"><span class="n">3 · re-verify</span><b>Staged bytes</b><span>re-hash on disk</span></div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-step"><span class="n">4 · gate</span><b>Semantic gate</b><span>same one the assessor uses</span></div>
+          <span class="pipe-arrow" aria-hidden="true">→</span>
+          <div class="pipe-step"><span class="n">5 · commit</span><b>Atomic rename</b><span>then advance state</span></div>
+        </div>
+        <p class="pipe-note"><strong>One path advances trust</strong> (<code>install</code>), so state is
+          never left half-advanced. <span class="discard">Any failure → discard the download, keep the
+          last-known-good.</span></p>
+
+        <!-- Two verify paths -->
         <div class="flow-cols reveal"
              role="img"
-             aria-label="Two verification paths. verify_download runs in the Updater with network and gh: the archive and the manifest attestation identity must match the anchor (binding the workflow path and the artifact-specific git ref — a bundle from its knowledge-v tag, a revocation from main), then manifest pack hashes, freshness, monotonic version versus client state, prev_digest chaining to the high-water manifest head (required once anything is installed), and revocation; any failure discards the download and keeps the last-known-good. verify_installed runs in the Assessor with no network: the in-package snapshot is bootstrap-trusted for integrity, a refreshed snapshot is trusted only if persistent client state records that its exact version and digest was attested.">
+             aria-label="Two verification paths. verify_download runs in the Updater with network and gh: the archive and the manifest attestation identity must match the anchor, binding the workflow path and the artifact-specific git ref — a bundle from its knowledge-v tag, a revocation from main — then manifest pack hashes with no undeclared pack, freshness with freeze protection, a version above the client's recorded highest_version, prev_digest chaining to the high-water manifest head (required once anything is installed), and not-revoked; any failure discards the download and keeps the last-known-good. verify_installed runs in the Assessor with no network: the in-package snapshot is bootstrap-trusted for integrity, and a refreshed snapshot is trusted only if persistent client state records that its exact version and digest was attested.">
           <div class="flow">
-            <span class="step-label">verify_download</span>
-            <h3>Updater · network / gh</h3>
+            <div class="f-head">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20Z"/></svg></span>
+              <div>
+                <span class="step-label">verify_download</span>
+                <h3>Updater · network / gh</h3>
+              </div>
+            </div>
             <ol>
-              <li><code>gh attestation verify</code> the archive <em>and</em> the manifest — identity matches the anchor (repo + workflow path + <em>artifact-specific</em> git ref: a bundle from its <code>knowledge-v</code> tag, a revocation from <code>main</code> + issuer)?</li>
-              <li>Manifest pack hashes match, and no <em>undeclared</em> pack sits in the tree.</li>
+              <li><strong>Identity</strong> matches the anchor — workflow path + <em>artifact-specific</em> ref (bundle ⇐ <code>knowledge-v</code> tag, revocation ⇐ <code>main</code>) + issuer.</li>
+              <li>Manifest pack hashes match; <strong>no undeclared</strong> pack.</li>
               <li>Fresh — short TTL, freeze protection.</li>
-              <li>Version &gt; the client's recorded <code>highest_version</code>.</li>
-              <li><code>prev_digest</code> chains to the high-water manifest head — <em>required</em> once anything is installed (a missing/broken link is discarded, never read as a first install).</li>
+              <li>Version &gt; recorded <code>highest_version</code>.</li>
+              <li><code>prev_digest</code> chains to the high-water head — <em>required</em> once installed.</li>
               <li>Not revoked.</li>
             </ol>
-            <p class="verdict"><span class="discard">ANY failure → DISCARD the download, keep the LKG.</span><br>
-              <span class="trust">All pass → eligible to install. <code>verify_download</code> decides; it mutates nothing.</span></p>
+            <p class="verdict"><span class="discard">ANY failure → DISCARD, keep LKG.</span><br>
+              <span class="trust">All pass → eligible. It decides; it mutates nothing.</span></p>
           </div>
           <div class="flow">
-            <span class="step-label">verify_installed</span>
-            <h3>Assessor · no network / gh</h3>
+            <div class="f-head">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg></span>
+              <div>
+                <span class="step-label">verify_installed</span>
+                <h3>Assessor · no network / gh</h3>
+              </div>
+            </div>
             <ol>
-              <li>Is the root the in-package snapshot?
-                <br>→ <strong>yes</strong>: bootstrap-trusted (integrity only).
-                <br>→ <strong>no</strong>: trusted only if client state records this exact version + digest was attested.</li>
-              <li>Manifest pack hashes match, and no undeclared pack.</li>
-              <li>Not revoked.</li>
-              <li>Else → untrusted; affected chains route to <code>needs_review</code>.</li>
+              <li>In-package snapshot? → <strong>yes</strong>: bootstrap-trusted (integrity only).</li>
+              <li>Otherwise → trusted <strong>only if</strong> client state records this exact version + digest was attested.</li>
+              <li>Pack hashes match; no undeclared pack; not revoked.</li>
+              <li>Else → untrusted; dependents route to <code>needs_review</code>.</li>
             </ol>
-            <p class="verdict"><span class="trust">The assessor never fetches; it verifies against
-              recorded client state.</span></p>
+            <p class="verdict"><span class="trust">Never fetches — verifies against recorded client state.</span></p>
           </div>
         </div>
 
-        <p class="muted reveal" style="margin-top:1.5rem">This defends against knowledge tampering,
-          rollback to vulnerable knowledge, a freeze on a stale version, a forged bundle, mix-and-match of
-          files (the attestation covers the manifest, which pins every pack), and a malicious mirror. Trust
-          is <strong>identity-constrained</strong>: a valid attestation for some <em>other</em>
-          repo/workflow does not satisfy the anchor. Anti-rollback is judged against the client's own
-          persistent memory (<code>~/.attestarc/state/trusted-state.json</code>), never a value inside
-          the bundle.</p>
-
-        <p class="muted reveal" style="margin-top:1.5rem"><strong>Verify → install → persist.</strong>
-          Advancing the high-water mark is done by exactly one path — <code>install</code> — so a bundle can
-          never verify while state is left half-advanced. It <strong>verifies the archive's own
-          attestation before extracting it</strong>, then <strong>safe-extracts</strong> the archive
-          (refusing absolute paths, <code>..</code>, and symlink/hardlink members <em>before</em> writing
-          anything, extracting member-by-member rather than <code>extractall</code>, and bounding member
-          count and per-file/total uncompressed size — re-checked against the bytes actually streamed — so a
-          decompression bomb is refused before it can exhaust disk), re-verifies the staged bytes, runs the
-          <strong>same semantic gate the assessor uses</strong> (<code>validate_snapshot</code> + consistency
-          + parse-completeness) so an attested-but-invalid snapshot can never advance the high-water mark,
-          atomically renames the snapshot into place, and only then atomically advances client state. Rollback memory (<code>~/.attestarc/state/</code>) and installed snapshots
-          (<code>~/.attestarc/knowledge/snapshots/</code>) live in separate directories, and a
-          <em>corrupt</em> — not merely absent — client-state file fails closed: the Updater refuses to
-          advance and the assessor falls back to the in-package snapshot until an explicit reinit. The
-          <code>prev_digest</code> chain is checked against a <strong>high-water manifest head</strong> that
-          only moves forward — a revocation can roll the active snapshot back to an older last-known-good but
-          never lowers that head, so an in-order release after a revocation still chains and installs.</p>
+        <p class="muted reveal" style="margin-top:1.25rem">Defends against, with trust
+          <strong>identity-constrained</strong> (an attestation for another repo/workflow doesn't satisfy the
+          anchor) and anti-rollback judged against the client's own memory
+          (<code>~/.attestarc/state/</code>), never the bundle:</p>
+        <div class="chips reveal">
+          <span class="chip">tampering</span>
+          <span class="chip">rollback to vulnerable</span>
+          <span class="chip">freeze on stale</span>
+          <span class="chip">forged bundle</span>
+          <span class="chip">mix-and-match packs</span>
+          <span class="chip">malicious mirror</span>
+        </div>
 
         <h3 class="reveal" style="margin-top:2rem">Installing the package</h3>
-        <p class="muted reveal">The story above authenticates <em>knowledge bundles</em>. The
-          <strong>skill package</strong> itself has a separate root of trust,
-          <code>bootstrap-anchor.json</code>, which lives at the repo root <em>outside</em> the shipped
-          payload. We are precise about what install-time verification you actually get:</p>
-        <ul class="muted reveal">
-          <li><strong>A <code>git clone</code> of a signed release tag does <em>not</em> verify the tag's
-            SSH signature.</strong> Git checks out the ref; it validates no signature unless you run
-            <code>git verify-tag</code>. Installing from a clone is fully supported (and still runs the
-            in-package knowledge integrity + trust-contract gate), but makes <em>no</em> cryptographic
-            claim about who produced the package.</li>
-          <li><strong>The cryptographic install-time check is
-            <code>python install.py --from-tarball &lt;path&gt;</code>.</strong> It runs
-            <code>gh attestation verify</code> on the release tarball against
-            <code>bootstrap-anchor.json</code> (repo + OIDC issuer + the
-            <code>release-skill.yml@refs/tags/v&lt;semver&gt;</code> identity) <em>before extracting
-            anything</em>, then safe-extracts and installs only the verified contents. The tarball is
-            produced and attested by <code>release-skill.yml</code> under the same exact-HEAD gate as the
-            knowledge release. Fail-secure: a missing <code>gh</code>, a verify failure, or a missing
-            anchor aborts the install with nothing extracted.</li>
-        </ul>
+        <p class="muted reveal section-lede">The <strong>skill package</strong> itself has a separate root of
+          trust — <code>bootstrap-anchor.json</code>, outside the shipped payload. Be precise about what you get:</p>
+        <div class="pkg-cards reveal">
+          <div class="pkg">
+            <span class="badge no"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>No crypto claim</span>
+            <h3><code>git clone</code> of a signed tag</h3>
+            <p>Git checks out the ref; it does <em>not</em> verify the tag's SSH signature unless you run
+              <code>git verify-tag</code>. Fully supported (still runs the in-package integrity + trust-contract
+              gate) — but makes no claim about <em>who</em> produced the package.</p>
+          </div>
+          <div class="pkg">
+            <span class="badge yes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Cryptographic check</span>
+            <h3><code>install.py --from-tarball</code></h3>
+            <p><code>gh attestation verify</code> against <code>bootstrap-anchor.json</code>
+              (repo + issuer + <code>release-skill.yml@refs/tags/v&lt;semver&gt;</code>) <em>before extracting</em>,
+              then safe-extracts only verified contents. Attested under an exact-HEAD gate. Fail-secure: any
+              gap aborts with nothing extracted.</p>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -285,63 +512,217 @@
     <section aria-labelledby="failsecure-h">
       <div class="container">
         <h2 id="failsecure-h" class="reveal">Fail-secure, and a kill switch</h2>
-        <p class="muted reveal">The runtime <strong>never fetches-then-trusts.</strong> On any anomaly it
-          degrades safely — and uncertainty always routes to <code>needs_review</code>, never to “ask the
-          LLM what seems reasonable.”</p>
+        <p class="muted reveal section-lede">The runtime <strong>never fetches-then-trusts.</strong> Every
+          anomaly degrades to one of a few safe responses — uncertainty always routes to
+          <code>needs_review</code>, never “ask the LLM what seems reasonable.”</p>
+
+        <div class="legend reveal" aria-hidden="true">
+          <span class="resp stop">DISCARD / REFUSE</span>
+          <span class="resp safe">KEEP LKG / FALL BACK</span>
+          <span class="resp route">ROUTE TO REVIEW / RE-OBSERVE</span>
+        </div>
+
         <div class="table-wrap reveal">
-          <table>
-            <thead><tr><th scope="col">Condition</th><th scope="col">Response</th></tr></thead>
+          <table class="fs-table">
+            <thead><tr><th scope="col">Condition</th><th scope="col" style="width:8.5rem">Response</th><th scope="col">Detail</th></tr></thead>
             <tbody>
-              <tr><td>Attestation absent / identity mismatch (download)</td><td><strong>Discard</strong> the download; keep the installed last-known-good</td></tr>
-              <tr><td>Manifest/pack tampered, rolled back, or frozen (expired)</td><td><strong>Discard</strong> the download; keep the installed last-known-good</td></tr>
-              <tr><td>Downloaded bundle presents <code>mode: bootstrap</code></td><td><strong>Reject</strong> — bootstrap is valid only for the in-package snapshot</td></tr>
-              <tr><td>Downloaded archive has an unsafe member (absolute path, <code>..</code>, symlink / hardlink / device)</td><td><strong>Refuse</strong> the whole extract before writing anything; nothing is installed</td></tr>
-              <tr><td>Downloaded archive is a decompression bomb (too many members, or over the per-file/total uncompressed cap)</td><td><strong>Refuse</strong> the extract before writing anything (caps re-checked against actual bytes streamed); nothing is installed</td></tr>
-              <tr><td>Rollback target (retained LKG) fails re-verification (missing, tampered, or recorded-digest mismatch)</td><td><strong>Skip</strong> it for the next-older verifiable snapshot; if none verify, fall back to the in-package bootstrap</td></tr>
-              <tr><td>Active (refreshed) snapshot fails verification at assessment time</td><td>Assessor <strong>falls back to the verified in-package bootstrap</strong> and continues (<code>fell_back_to_bootstrap</code>) — never reasons over the untrusted set nor aborts</td></tr>
-              <tr><td>Client state present but corrupt (rollback memory lost)</td><td>Mark <code>_corrupt</code> and <strong>refuse</strong> to advance state; assessor falls back to the in-package snapshot until explicit reinit</td></tr>
-              <tr><td>Installed knowledge expired (stale / frozen)</td><td>Warn; stays trusted as the last-known-good floor, but a stale down-gate fact (<code>effect: mitigation</code>/<code>neutral</code>) no longer drives a conclusion — only <code>risk-increasing</code> facts keep driving</td></tr>
-              <tr><td>Snapshot violates its own trust contract (schema / provenance-vs-registry / secret)</td><td><code>validate_snapshot</code> withholds trust → set untrusted (<code>needs_review</code>); refused at install time</td></tr>
-              <tr><td>A verified pack only partially parses</td><td>Treat the whole set as inconsistent — never reason over the lines that happened to parse</td></tr>
-              <tr><td>Read with the verify-gate skipped (<code>--allow-unverified</code>, tooling only)</td><td>Facts surfaced, but <code>drives_conclusion</code> forced false</td></tr>
-              <tr><td>Knowledge unavailable</td><td>Fall back to the in-package snapshot</td></tr>
-              <tr><td>Knowledge conflict (authoritative vs authoritative)</td><td><code>status: disputed</code> → downgrade dependents to <code>needs_review</code></td></tr>
-              <tr><td>Unknown platform / version</td><td><code>needs_review</code></td></tr>
-              <tr><td>Knowledge changed after a finding was recorded</td><td>Mark dependents <code>requires_reverification</code>; re-observe</td></tr>
+              <tr><td>Attestation absent / identity mismatch</td><td><span class="resp stop">DISCARD</span></td><td>Keep the installed last-known-good</td></tr>
+              <tr><td>Manifest/pack tampered, rolled back, or frozen</td><td><span class="resp stop">DISCARD</span></td><td>Keep the installed last-known-good</td></tr>
+              <tr><td>Downloaded bundle presents <code>mode: bootstrap</code></td><td><span class="resp stop">REJECT</span></td><td>Bootstrap is valid only for the in-package snapshot</td></tr>
+              <tr><td>Unsafe archive member (abs path, <code>..</code>, sym/hardlink, device)</td><td><span class="resp stop">REFUSE</span></td><td>Whole extract refused before writing anything</td></tr>
+              <tr><td>Decompression bomb (member count / size caps)</td><td><span class="resp stop">REFUSE</span></td><td>Caps re-checked against actual bytes streamed</td></tr>
+              <tr><td>Rollback target (retained LKG) fails re-verification</td><td><span class="resp route">SKIP</span></td><td>Try next-older; if none verify → in-package bootstrap</td></tr>
+              <tr><td>Active refreshed snapshot fails verification at read time</td><td><span class="resp safe">FALL BACK</span></td><td>To the verified in-package bootstrap (<code>fell_back_to_bootstrap</code>)</td></tr>
+              <tr><td>Client state present but corrupt</td><td><span class="resp safe">FALL BACK</span></td><td>Refuse to advance; use in-package snapshot until reinit</td></tr>
+              <tr><td>Installed knowledge expired (stale / frozen)</td><td><span class="resp route">DEGRADE</span></td><td>Stays as floor; a stale down-gate fact stops driving — only risk-increasing keeps driving</td></tr>
+              <tr><td>Snapshot violates its trust contract (schema / provenance / secret)</td><td><span class="resp route">REVIEW</span></td><td><code>validate_snapshot</code> withholds trust; refused at install</td></tr>
+              <tr><td>A verified pack only partially parses</td><td><span class="resp stop">REJECT SET</span></td><td>Never reason over the lines that happened to parse</td></tr>
+              <tr><td>Read with verify-gate skipped (<code>--allow-unverified</code>)</td><td><span class="resp route">SURFACE ONLY</span></td><td><code>drives_conclusion</code> forced false</td></tr>
+              <tr><td>Knowledge unavailable</td><td><span class="resp safe">FALL BACK</span></td><td>To the in-package snapshot</td></tr>
+              <tr><td>Conflict (authoritative vs authoritative)</td><td><span class="resp route">REVIEW</span></td><td><code>status: disputed</code> → dependents to <code>needs_review</code></td></tr>
+              <tr><td>Unknown platform / version</td><td><span class="resp route">REVIEW</span></td><td>Routes to <code>needs_review</code></td></tr>
+              <tr><td>Knowledge changed after a finding was recorded</td><td><span class="resp route">RE-OBSERVE</span></td><td>Mark <code>requires_reverification</code>; re-observe the condition</td></tr>
             </tbody>
           </table>
         </div>
-        <p class="muted reveal" style="margin-top:1.5rem"><strong>Kill switch.</strong> A compromised
-          knowledge version can be revoked. The single public revocation path
-          (<code>verify_and_apply_revocation</code>) attests the revocation record against the anchor exactly
-          like a bundle, records the revoked version(s), rolls the active snapshot back to the most recent
-          retained non-revoked one — <strong>re-verifying that rollback target</strong> (integrity +
-          recorded-digest match + semantic gate) before adopting it, so a tampered retained snapshot is never
-          silently reinstated, and falling back to the in-package bootstrap when none verify — and marks
-          findings assessed under it <code>requires_reverification</code>. Because the internal caller-trusts-me apply
-          has no public entry point, a forged revocation cannot become an attacker's rollback primitive — and
-          it <em>re-observes</em> affected findings rather than silently resolving them. This path is designed
-          before it is needed.</p>
+
+        <h3 class="reveal" style="margin-top:2rem">Kill switch</h3>
+        <div class="killswitch reveal" role="img"
+             aria-label="Kill-switch flow: the single public revocation path attestation-verifies the revocation record against the anchor exactly like a bundle, rolls the active snapshot back to the most recent retained non-revoked one while re-verifying that rollback target (integrity, recorded-digest match, semantic gate) — falling back to the in-package bootstrap if none verify — and marks findings assessed under the revoked version requires_reverification so they are re-observed, never silently resolved.">
+          <span class="ks-step"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V5l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg></span>Attest the revocation record</span>
+          <span class="ks-arrow" aria-hidden="true">→</span>
+          <span class="ks-step"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.4 2.6L3 8"/><path d="M3 3v5h5"/></svg></span>Roll back to a <em>re-verified</em> LKG</span>
+          <span class="ks-arrow" aria-hidden="true">→</span>
+          <span class="ks-step"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>Re-observe affected findings</span>
+        </div>
+        <p class="muted reveal" style="margin-top:1rem">The internal caller-trusts-me apply has <strong>no public
+          entry point</strong>, so a forged revocation can't become an attacker's rollback primitive — and a
+          tampered retained snapshot is never silently reinstated.</p>
       </div>
     </section>
 
-    <!-- 6. What's novel -->
-    <section aria-labelledby="novel-h">
+    <!-- 6. How trust is created: architecture map + process workflows -->
+    <section id="architecture" aria-labelledby="arch-h">
       <div class="container">
-        <h2 id="novel-h" class="reveal">What's novel here</h2>
-        <div class="grid cols-3">
-          <article class="card reveal"><h3>A trust-split brain</h3><p>The security-relevant reasoning corpus is partitioned Kernel / Verified / Candidate, and the boundary is enforced in code and process — not in prompt text.</p></article>
-          <article class="card reveal"><h3>Verification is a fact, not a verdict</h3><p>The helpers emit checks and facts; they never render a security judgment. Verified knowledge drives conclusions only after the verify-gate; candidate knowledge only shapes questions.</p></article>
-          <article class="card reveal"><h3>Derived, not asserted, authority</h3><p>A source's authority is re-derived by reclassifying its URL through an identity-scoped registry. A candidate that self-declares its authority is rejected if it disagrees.</p></article>
-          <article class="card reveal"><h3>An external attestation anchor</h3><p>The pinned Sigstore identity lives outside every downloadable bundle, so a bundle can never declare its own trust. It binds the workflow path <em>and</em> an <em>artifact-specific</em> git ref — a bundle must be signed from its <code>knowledge-v</code> tag, a revocation from <code>main</code>, so neither can impersonate the other. The release workflow refuses to sign a bundle unless the tagged commit <em>is the current tip of</em> <code>main</code> (an exact-HEAD gate, not mere ancestry) — so an old reviewed commit can't be retagged as a higher version, and provenance can't be minted from an unreviewed ref. The attest+publish job runs only in a protected <code>knowledge-release</code> environment restricted to signed, immutable <code>knowledge-v*</code> tags. Sigstore build-provenance replaces a homemade role protocol.</p></article>
-          <article class="card reveal"><h3>Bootstrap vs verified-LKG</h3><p>The in-package snapshot is bootstrap-trusted; a refreshed one is trusted only if the client's own out-of-band memory records that exact version + digest was attested.</p></article>
-          <article class="card reveal"><h3>Direction over confidence</h3><p>A high-authority source proposing a security-<em>negative</em> or merely <em>uncertain</em> change still gets human review. The direction is <em>derived</em> from the claim's effect and its diff against the last released snapshot — never read from a model-controlled field — and an additive edit of an active entry routes to review even without an explicit supersede.</p></article>
-          <article class="card reveal"><h3>Self-verifying quarantine receipts</h3><p>Fetched documents are stored by content hash with a receipt binding the object to derived provenance, and treated as inert data — never as instructions. Resolving a receipt re-hashes the stored bytes and re-classifies its final URL, so a fabricated receipt does not resolve and a cross-origin redirect is rejected. Every promotion-eligible source must carry one.</p></article>
-          <article class="card reveal"><h3>The eval corpus is root-of-trust</h3><p>A knowledge change may add paired find/refuse evals but can never weaken or delete a trusted eval in the same step — a poisoning change cannot also delete the test that catches it.</p></article>
-          <article class="card reveal"><h3>Promotion is enforced at release</h3><p>A candidate's eval-result is trusted only when it's <em>digest-bound</em> to the exact candidate, baseline, and eval corpus it was judged over — a bare <code>{"passed": true}</code> or a recycled result never counts. The changed-path diff is derived from <code>git</code>, not caller flags, and judged against a mandatory, pinned last-released baseline (never the working tree). At release, <code>verify-promotions</code> recomputes every active entry's decision and fails the build unless each was promoted through the policy — so a hand-edited pack can never ship.</p></article>
-          <article class="card reveal"><h3>Findings bound by content hash</h3><p>Findings record <code>{id, content_hash}</code> dependencies; a superseded fact surfaces <code>requires_reverification</code> as a read-time view — never a silent mutation, never an auto-resolve.</p></article>
-          <article class="card reveal"><h3>Integrity ≠ conformance</h3><p>A matching attested pack hash proves only <em>these are the released bytes</em>. Before it drives a conclusion, a snapshot must also pass <code>validate_snapshot</code>: every entry schema-valid, every source's authority matching the registry's classification of its URL, no secret-looking value — checked at install and on every read.</p></article>
-          <article class="card reveal"><h3>Not even a hash of a secret</h3><p>A secret-like injection attempt is fingerprinted for audit, but if the text looks like a secret the hash is withheld — a low-entropy secret is recoverable from its sha256, so only a redaction marker is stored.</p></article>
+        <h2 id="arch-h" class="reveal">How trust is created</h2>
+        <p class="muted reveal section-lede">Trust is never <em>asserted</em> — it is <em>produced</em> by
+          two deterministic pipelines and consumed by an offline assessor. Below, the components
+          <strong>are</strong> the process; the text is only a hint.</p>
+
+        <!-- Architecture map -->
+        <div class="archmap reveal" role="img"
+             aria-label="Architecture overview. A trusted core — verified knowledge plus the kernel — is fed by two pipelines. On the left, untrusted candidate knowledge is admitted only through the deterministic promotion policy. On the right, a reviewed source becomes an attested release only through an exact-HEAD gate and Sigstore signing. A network boundary separates these online pipelines from the assessor.">
+          <div class="am-col">
+            <span class="am-kicker">Untrusted · online</span>
+            <div class="am-box warn"><b>Candidate knowledge</b><small>LLM / web / user claims</small></div>
+            <div class="am-flow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>promotion policy</div>
+          </div>
+          <div class="am-box core"><b>Verified knowledge + Kernel</b><small>the trusted core</small></div>
+          <div class="am-col">
+            <span class="am-kicker">Attested · online</span>
+            <div class="am-box"><b>Reviewed source</b><small>PR into protected <code>main</code></small></div>
+            <div class="am-flow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 5-7 7 7 7"/></svg>exact-HEAD + Sigstore</div>
+          </div>
+        </div>
+        <div class="am-out reveal" role="img"
+             aria-label="The offline, read-only assessor reads the verified core through the verify-gate and writes findings bound by content hash, which are re-observed when knowledge changes; the assessor never reaches the network.">
+          <span>Assessor</span><small>offline · read-only</small>
+          <span class="sep" aria-hidden="true">→</span>
+          <span>verify-gate</span>
+          <span class="sep" aria-hidden="true">→</span>
+          <span>findings <code>{id, content_hash}</code></span>
+          <span class="sep" aria-hidden="true">→</span>
+          <span>re-observe on change</span>
+        </div>
+
+        <!-- Workflow 1: Candidate → Verified -->
+        <div class="wf-h3 reveal">
+          <span class="badge">Workflow 1</span>
+          <h3>Candidate → Verified · the promotion pipeline</h3>
+        </div>
+        <div class="wf reveal" role="img"
+             aria-label="Promotion pipeline, top to bottom. Step 1: an allow-listed source is fetched by an adapter that records the requested URL, final URL, and redirect chain — the model never supplies raw bytes. Gate: a quarantine receipt stores the document by content hash; resolving it re-hashes the stored bytes and re-classifies the final URL, so a fabricated receipt does not resolve and a cross-origin redirect is rejected. Step 2: the result is only a candidate — no status, confidence, or self-declared authority; helpers emit facts, not verdicts. Gate: authority is re-derived by classifying the source URL through a registry, and a candidate that self-declares a different authority is rejected. Gate: the security direction is derived from the candidate's effect and its diff against the mandatory pinned last-released snapshot; a lowering, uncertain, or additive edit of an active entry routes to review and is never read from a model field. Step 3, branch: promotion is either auto-promote, which requires a digest-bound eval-result tying the exact candidate, baseline, and eval corpus together so a bare passed-true or recycled result never counts, or human review with a recorded approver; the eval corpus is itself root-of-trust, so a change may add paired evals but never weaken or delete a trusted one in the same step. Gate at release: verify-promotions recomputes every active entry from the pinned inputs and fails the build unless each was promoted through the policy, so a hand-edited pack can never ship. Step 4: only then does the entry become verified knowledge, which drives a conclusion only after the verify-gate.">
+          <div class="wf-step start">
+            <span class="num">1</span>
+            <div class="body"><b>Allow-listed source</b><p class="hint">Fetch adapter records requested URL, final URL &amp; redirect chain — the model never supplies raw bytes.</p></div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-gwrap">
+            <span class="wf-gate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3Z"/></svg>Gate · quarantine receipt</span>
+            <p class="hint">Stored by content hash; resolving re-hashes the bytes &amp; re-checks the final URL — a forged receipt won't resolve, a cross-origin redirect is rejected.</p>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-step">
+            <span class="num">2</span>
+            <div class="body"><b>Candidate</b><p class="hint">Model output only — no <code>status</code>, <code>confidence</code>, or self-declared authority. Helpers emit facts, not verdicts.</p></div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-gwrap">
+            <span class="wf-gate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3Z"/></svg>Derive · authority ← URL registry</span>
+            <p class="hint">Re-derived by classifying the source URL; a candidate that self-declares a different authority is rejected.</p>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-gwrap">
+            <span class="wf-gate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3Z"/></svg>Derive · direction ← git diff</span>
+            <p class="hint">A lowering, uncertain, or additive edit of an active entry → review. Never read from a model field.</p>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-branch">
+            <div class="wf-step">
+              <span class="num">3a</span>
+              <div class="body"><b>Auto-promote</b><p class="hint">Requires a <em>digest-bound</em> eval-result (candidate + baseline + corpus). A bare <code>{passed:true}</code> or recycled result never counts.</p></div>
+            </div>
+            <div class="wf-step">
+              <span class="num">3b</span>
+              <div class="body"><b>Human review</b><p class="hint">Recorded approver. Evals are additive-only — a change can't delete the test that catches it.</p></div>
+            </div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-gwrap">
+            <span class="wf-gate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V5l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>Gate @ release · verify-promotions</span>
+            <p class="hint">Recomputes every active entry from pinned inputs; a hand-edited pack can't ship.</p>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-step end">
+            <span class="num"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
+            <div class="body"><b>Verified knowledge</b><p class="hint">Drives a conclusion <strong>only after</strong> the verify-gate.</p></div>
+          </div>
+        </div>
+
+        <!-- Workflow 2: Reviewed commit → Installed trust -->
+        <div class="wf-h3 reveal">
+          <span class="badge">Workflow 2</span>
+          <h3>Reviewed commit → Installed trust · release &amp; attestation</h3>
+        </div>
+        <div class="wf reveal" role="img"
+             aria-label="Release and attestation pipeline, top to bottom. Step 1: a reviewed commit on protected main; root-of-trust files need two parties. Gate: the exact-HEAD gate requires the tagged commit to be the current tip of main, not mere ancestry, so an old commit can't be retagged as a higher version. Step 2: sign and attest with Sigstore under an artifact-specific ref — a bundle from its knowledge-v tag, a revocation from main — so neither can impersonate the other. Step 3: the external anchor ships outside the bundle, so a bundle can never declare its own trust. Step 4: verify_download checks identity, pack hashes, freshness, monotonic version, the prev_digest chain to the high-water head, and not-revoked; any failure discards the download and keeps the last-known-good. Step 5: install runs verify, then safe-extract, then re-verify, then a semantic gate, then an atomic commit — the one path that advances trust. Gate: integrity is not conformance — a matching hash proves only these are the released bytes, so validate_snapshot must also pass at install and every read. Step 6: the result is a verified last-known-good, trusted only if the client's own memory records this exact version and digest was attested; otherwise the in-package bootstrap.">
+          <div class="wf-step start">
+            <span class="num">1</span>
+            <div class="body"><b>Reviewed commit on <code>main</code></b><p class="hint">PR-reviewed; root-of-trust files need two parties.</p></div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-gwrap">
+            <span class="wf-gate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>Gate · exact-HEAD</span>
+            <p class="hint">The tagged commit must <strong>be</strong> the tip of <code>main</code> — not mere ancestry — so an old commit can't be retagged as a higher version.</p>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-step">
+            <span class="num">2</span>
+            <div class="body"><b>Sign &amp; attest · Sigstore</b><p class="hint">Artifact-specific ref: a bundle ⇐ its <code>knowledge-v</code> tag, a revocation ⇐ <code>main</code> — neither can impersonate the other.</p></div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-step">
+            <span class="num">3</span>
+            <div class="body"><b>External anchor</b><p class="hint">The pinned identity ships <em>outside</em> the bundle, so a bundle can never declare its own trust.</p></div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-step">
+            <span class="num">4</span>
+            <div class="body"><b><code>verify_download</code> · Updater</b><p class="hint">Identity + pack hashes + freshness + monotonic version + <code>prev_digest</code> chain + not-revoked. Any failure → discard, keep LKG.</p></div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-step">
+            <span class="num">5</span>
+            <div class="body"><b><code>install</code></b><p class="hint">verify → safe-extract → re-verify → semantic gate → atomic commit. The one path that advances trust.</p></div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-gwrap">
+            <span class="wf-gate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M8 12h8"/></svg>Gate · integrity ≠ conformance</span>
+            <p class="hint">A matching hash proves only “released bytes.” <code>validate_snapshot</code> must also pass — at install and every read.</p>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-step end">
+            <span class="num"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
+            <div class="body"><b>Verified last-known-good</b><p class="hint">Trusted only if the client's own memory records this exact version + digest was attested; otherwise the in-package bootstrap.</p></div>
+          </div>
+        </div>
+
+        <!-- Workflow 3: Assessment → findings → re-observation -->
+        <div class="wf-h3 reveal">
+          <span class="badge">Workflow 3</span>
+          <h3>Assessment → findings → re-observation</h3>
+        </div>
+        <div class="wf reveal" role="img"
+             aria-label="Assessment loop, top to bottom. Step 1: the assessor is offline and read-only — no network — and reads verified knowledge only through the verify-gate. Step 2: it writes findings bound by content hash; a secret-like value is fingerprinted for audit, but if it looks like a secret the hash is withheld because a low-entropy secret is recoverable from its sha256. Gate: a knowledge change never auto-resolves a finding. Step 3: affected findings are marked requires_reverification as a read-time view and the actual condition is re-observed, never silently mutated.">
+          <div class="wf-step start">
+            <span class="num">1</span>
+            <div class="body"><b>Assessor · offline, read-only</b><p class="hint">No network; reads verified knowledge only through the verify-gate.</p></div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-step">
+            <span class="num">2</span>
+            <div class="body"><b>Findings <code>{id, content_hash}</code></b><p class="hint">A secret-like value is fingerprinted for audit — but if it looks like a secret the hash is <strong>withheld</strong> (recoverable from its sha256).</p></div>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-gwrap">
+            <span class="wf-gate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3Z"/></svg>Gate · knowledge change</span>
+            <p class="hint">Never auto-resolves a finding.</p>
+          </div>
+          <div class="wf-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></div>
+          <div class="wf-step end">
+            <span class="num"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>
+            <div class="body"><b><code>requires_reverification</code> → re-observe</b><p class="hint">A read-time view; the actual condition is re-observed, never silently mutated.</p></div>
+          </div>
         </div>
       </div>
     </section>
@@ -350,8 +731,8 @@
     <section aria-labelledby="more-h">
       <div class="container">
         <h2 id="more-h" class="reveal">Read the source of truth</h2>
-        <p class="muted reveal">This page is a transparent summary. The normative detail — every gate,
-          every invariant, the promotion tiers, and the glossary — lives in the repository:</p>
+        <p class="muted reveal section-lede">This page is a transparent summary. Every gate, invariant,
+          promotion tier, and the glossary live in the repository:</p>
         <div class="cta-row reveal">
           <a class="btn btn-ghost" href="https://github.com/avishayil/attestarc-skill/blob/main/THREAT_MODEL.md" target="_blank" rel="noopener">THREAT_MODEL.md</a>
           <a class="btn btn-ghost" href="https://github.com/avishayil/attestarc-skill/blob/main/SPECIFICATION.md" target="_blank" rel="noopener">SPECIFICATION.md §20–24</a>
