@@ -30,8 +30,9 @@ prohibit:
     authoritative.
   - Fetching the claim's source over the network during assessment.
 notes: >
-  Verified knowledge requires provenance + a valid threshold signature; candidate
-  knowledge may shape questions but MUST NOT change a conclusion (SPECIFICATION.md;
-  THREAT_MODEL.md §6; core/promotion-policy.md "direction matters more than
-  confidence"). Provide the claim as a candidate JSONL entry and/or a tampered
-  pack so `knowledge_verify.py` reports untrusted.
+  Verified knowledge requires provenance + a valid attestation whose identity
+  matches the external trust anchor; candidate knowledge may shape questions but
+  MUST NOT change a conclusion (SPECIFICATION.md; THREAT_MODEL.md §6;
+  core/promotion-policy.md "direction matters more than confidence"). Provide the
+  claim as a candidate JSONL entry and/or a tampered pack so `knowledge_verify.py`
+  reports untrusted.

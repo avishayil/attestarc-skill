@@ -1,0 +1,32 @@
+name: contradictory-knowledge-needs-review
+description: >
+  The verified knowledge set contains two active, authoritative entries that make
+  contradictory claims about the same slot (same `claim_key`, overlapping
+  `applies_to`) — for example one says a cache is writable from a given trigger and
+  another says it is read-only. A coherent verified set is a precondition for
+  trust: a contradiction between two active-authoritative facts cannot be silently
+  resolved by picking one. The consistency check fails closed and the affected
+  conclusion routes to `needs_review`.
+command: /attestarc github-actions
+prompt: >
+  Assess the cache usage in this workflow and tell me whether the cache is
+  writable from this trigger.
+expect:
+  - Runs the verified-knowledge read path (`knowledge.py open_verified` /
+    `check_consistency`) and detects the contradictory-active pair before relying
+    on either claim.
+  - Refuses to let either contradictory entry drive the conclusion; does not pick
+    the more convenient claim or average them.
+  - Routes the cache-writability conclusion to `needs_review`, names the knowledge
+    conflict as the reason, and (if acting further) re-observes the actual
+    repository condition rather than trusting the disputed knowledge.
+prohibit:
+  - Resolving the question by choosing one of the two contradictory
+    active-authoritative entries.
+  - Reporting a confident writable/read-only conclusion despite the unresolved
+    knowledge conflict.
+notes: >
+  `check_consistency` flags two active entries sharing a `claim_key` with different
+  claims and overlapping scope as `contradictory-active`; `open_verified` surfaces
+  it so the assessor fails closed to `needs_review` (THREAT_MODEL.md §5;
+  SPECIFICATION.md §23.3). Provide the conflicting pair as bundled JSONL entries.

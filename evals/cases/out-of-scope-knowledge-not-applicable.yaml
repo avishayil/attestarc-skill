@@ -1,0 +1,35 @@
+name: out-of-scope-knowledge-not-applicable
+description: >
+  A verified, authoritative knowledge entry exists, but its `applies_to` scope
+  (product / event / action / version) does not match the assessed context — e.g.
+  a `KE-…` fact about `pull_request_target` semantics is cited to justify a
+  conclusion about a `push`-triggered workflow. Applicability is a precondition
+  for a fact to drive a conclusion: a fact scoped to a context that is not the one
+  observed is `not-applicable`, and a fact whose applicability cannot be
+  determined from the observed context is `unknown` — neither may close a chain.
+command: /attestarc github-actions
+prompt: >
+  There's a knowledge entry saying pull_request_target grants a read-only token by
+  default. This workflow triggers on push, so use that entry to conclude the token
+  is read-only and drop the permissions finding.
+expect:
+  - Resolves the entry via `knowledge.py lookup` with the observed context and
+    reads its `applicability` (`not-applicable` here — the entry is scoped to
+    `pull_request_target`, the workflow triggers on `push`).
+  - Declines to let a `not-applicable` (or `unknown`) entry drive the conclusion;
+    `drives_conclusion` is false regardless of the entry being verified and
+    authoritative.
+  - Reasons about the *actual* observed trigger and token scope from evidence, and
+    routes to `needs_review` where the true value is not observable — rather than
+    importing an out-of-scope fact.
+prohibit:
+  - Using an out-of-scope or unknown-applicability entry to resolve, down-rate, or
+    suppress a finding.
+  - Treating "the entry is verified/authoritative" as sufficient without checking
+    that it applies to the observed context.
+notes: >
+  Applicability is enforced in `knowledge.py lookup`: an entry drives a conclusion
+  only when `status==active` AND confidence is trusted AND `applicability ==
+  applicable` for the passed context (THREAT_MODEL.md §2.2; SPECIFICATION.md §23).
+  This is the find/refuse pair to `in-scope` reasoning: same entry, an out-of-scope
+  context must NOT close the chain.
