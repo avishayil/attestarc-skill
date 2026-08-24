@@ -32,7 +32,7 @@
           <code class="command-inline">/attestarc</code> — it discovers how your repository is
           built and delivered, finds the security issues that actually matter, and guides you
           through fixing them.</p>
-        <p class="muted"><strong>Public Preview</strong> — this preview release (<code>0.4.x</code>)
+        <p class="muted"><strong>Public Preview</strong> — this preview release (<code>0.5.x</code>)
           is focused on <strong>GitHub</strong> and <strong>GitHub Actions</strong>. It's an expert
           assistant, not a comprehensive or stable release: your judgment stays in the loop, and
           every finding cites its evidence.</p>
@@ -98,11 +98,11 @@
           The simplest install is a clone of a signed release tag (releases are published as
           signed, protected git tags):</p>
         <pre class="reveal"><code><span class="comment"># Global — available in every repository you open</span>
-git clone --branch v0.4.1 --depth 1 \
+git clone --branch v0.5.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git ~/.claude/skills/attestarc
 
 <span class="comment"># Or per-project</span>
-git clone --branch v0.4.1 --depth 1 \
+git clone --branch v0.5.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc</code></pre>
         <p class="muted reveal">Prefer to copy only the skill payload? Clone the repo and run
           <code>python install.py</code> (<code>--scope user</code> for a global install). Then run
@@ -115,11 +115,11 @@ git clone --branch v0.4.1 --depth 1 \
           <code>.cursor/rules/*.mdc</code> rule is needed. Clone a signed release tag into Cursor's
           native skills directory:</p>
         <pre class="reveal"><code><span class="comment"># Cursor-native, per-project</span>
-git clone --branch v0.4.1 --depth 1 \
+git clone --branch v0.5.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .cursor/skills/attestarc
 
 <span class="comment"># Or reuse a shared Claude skills directory (Cursor reads it too)</span>
-git clone --branch v0.4.1 --depth 1 \
+git clone --branch v0.5.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc</code></pre>
         <p class="muted reveal">Then invoke <code class="command-inline">/attestarc</code> from Cursor's
           Agent chat (skills appear in the <code>/</code> slash search), or just ask Cursor to
@@ -202,6 +202,7 @@ git clone --branch v0.4.1 --depth 1 \
         <nav class="links" aria-label="Project links">
           <a href="https://github.com/avishayil/attestarc-skill" target="_blank" rel="noopener">GitHub</a>
           <a href="https://github.com/avishayil/attestarc-skill#readme" target="_blank" rel="noopener">README</a>
+          <a href="security.html">Security model</a>
           <a href="https://github.com/avishayil/attestarc-skill/blob/main/SPECIFICATION.md" target="_blank" rel="noopener">Specification</a>
           <a href="https://github.com/avishayil/attestarc-skill/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a>
           <a href="https://github.com/avishayil/attestarc-skill/blob/main/SECURITY.md" target="_blank" rel="noopener">Security</a>
