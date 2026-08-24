@@ -26,7 +26,7 @@ No compliance report.
 It works inside the repository, with the coding agent you already use.
 
 > **Public Preview — GitHub & GitHub Actions.** This is a preview release
-> (`0.4.x`) focused on GitHub repositories and GitHub Actions. Other CI systems
+> (`0.5.x`) focused on GitHub repositories and GitHub Actions. Other CI systems
 > are detected and reviewed with a generic methodology at lower confidence.
 > Treat it as an expert assistant, not a comprehensive or stable release — your
 > judgment stays in the loop, and every finding cites its evidence.
@@ -47,6 +47,23 @@ The principle:
 
 > **The engineer provides the repository. AttestArc provides the security methodology.**
 
+## Security model
+
+AttestArc is a skill that can *learn* — it consults versioned platform facts (a
+*knowledge plane*) that change what a finding means. Because poisoning that
+knowledge would be equivalent to compromising scanner logic, AttestArc partitions
+its own reasoning corpus by trust — **Kernel** (always loaded, never
+runtime-mutated), **Verified Knowledge** (attested, versioned, temporal), and
+**Candidate Knowledge** (untrusted; may shape questions, never conclusions) — and
+ships knowledge as a Sigstore-attested, versioned plane anchored by an external
+`trust-anchor.json`. Nothing learned at runtime can grant the running assessor
+more trust.
+
+See the [security model](https://avishay.co.il/attestarc-skill/security.html)
+page for a visual overview, [`SECURITY.md`](SECURITY.md) for the public summary
+and reporting policy, and [`THREAT_MODEL.md`](THREAT_MODEL.md) for the full,
+normative rationale.
+
 ## Install
 
 ### Prerequisites
@@ -64,11 +81,11 @@ tag can't be moved out from under you):
 
 ```bash
 # Global — available in every repository you open
-git clone --branch v0.4.1 --depth 1 \
+git clone --branch v0.5.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git ~/.claude/skills/attestarc
 
 # Or per-project — scoped to one repository
-git clone --branch v0.4.1 --depth 1 \
+git clone --branch v0.5.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc
 ```
 
@@ -76,7 +93,7 @@ Prefer to copy only the skill payload (leaving development files behind)? Use th
 installer:
 
 ```bash
-git clone --branch v0.4.1 --depth 1 https://github.com/avishayil/attestarc-skill.git
+git clone --branch v0.5.0 --depth 1 https://github.com/avishayil/attestarc-skill.git
 cd attestarc-skill
 
 python install.py                                  # current project → .claude/skills/attestarc/
@@ -100,14 +117,14 @@ Clone a signed release tag into Cursor's native skills directory:
 
 ```bash
 # Cursor-native, per-project
-git clone --branch v0.4.1 --depth 1 \
+git clone --branch v0.5.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .cursor/skills/attestarc
 ```
 
 Or reuse a shared Claude skills directory, which Cursor also reads:
 
 ```bash
-git clone --branch v0.4.1 --depth 1 \
+git clone --branch v0.5.0 --depth 1 \
   https://github.com/avishayil/attestarc-skill.git .claude/skills/attestarc
 ```
 

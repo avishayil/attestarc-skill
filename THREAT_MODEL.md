@@ -10,6 +10,21 @@
 The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT,
 RECOMMENDED, MAY, and OPTIONAL are interpreted as in RFC 2119.
 
+**How to read this, and where else the model is documented.** This document is the
+**normative** source for AttestArc's own security. Two other surfaces summarize it
+for different audiences and MUST stay consistent with it (see the doc-sync rule in
+`CLAUDE.md`):
+
+- [`SECURITY.md`](SECURITY.md) — the public summary and vulnerability-reporting
+  policy; it feeds the GitHub Security tab.
+- The [security page](https://avishay.co.il/attestarc-skill/security.html) on the
+  project site — a visual overview with the same trust zones, principals, and
+  verify-chain.
+
+Where they overlap, this document is authoritative and the others mirror it; the
+trust-zone description (§2) and the verify-chain diagram (§4) are the canonical text.
+A glossary of the coined terms is in §9.
+
 ## 1. Why AttestArc needs its own threat model
 
 Once AttestArc can dynamically learn facts that alter security verdicts,
@@ -183,3 +198,35 @@ A compromised knowledge version MUST be revocable: publishing a revocation cause
 clients to disable that version, roll back to the last verified snapshot, and mark
 findings assessed under it `requires_reverification`. This path is designed before
 it is needed.
+
+## 9. Glossary
+
+Terms coined in this document and reused across `SECURITY.md`, `SPECIFICATION.md`,
+and the security page.
+
+- **Trust anchor** — the external root of trust (`knowledge/trust-anchor.json`)
+  that ships inside the SSH-signed skill release and lives outside any downloaded
+  bundle. It pins the Sigstore build-provenance identity (repo + signer workflow +
+  OIDC issuer) an official bundle must have been produced under. Two-party review
+  to change.
+- **Bootstrap-trusted** — the trust status of the *in-package* knowledge snapshot:
+  it is trusted for integrity (its packs match the manifest) *because it rode in on
+  the attested skill release*, not because it declares itself trusted. A
+  *downloaded* bundle presenting `mode: bootstrap` is always rejected.
+- **Verified-LKG (last-known-good)** — a refreshed snapshot that is trusted only
+  because persistent client state records that its exact version + manifest digest
+  was attestation-verified. The retained LKG is what fail-secure falls back to.
+- **Quarantine receipt (`QR-…`)** — a record binding an upstream fetched document
+  (stored by content hash) to its registry-derived provenance. Candidate knowledge
+  references a receipt; the document is inert data, never instructions.
+- **Derived authority** — a source's authority integer, obtained by reclassifying
+  its URL through the identity-scoped source registry (`knowledge/sources.yaml`),
+  never taken from a candidate's self-declaration. A candidate whose declared
+  authority/publisher/type disagrees with the derived values is rejected.
+- **`requires_reverification`** — a read-time view surfaced on a finding whose
+  knowledge dependency was superseded or revoked. The stored status is never
+  silently mutated and a knowledge change never auto-resolves a finding; the
+  condition is re-observed.
+- **`needs_review`** — the fail-secure landing state for uncertainty: an unknown
+  platform/version, an unverifiable snapshot, or an authoritative-vs-authoritative
+  conflict routes here rather than to an improvised LLM judgment.
