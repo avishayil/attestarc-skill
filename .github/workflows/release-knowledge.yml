@@ -1,0 +1,174 @@
+# Knowledge-plane release + signing (root-of-trust workflow).
+#
+# Builds the TUF-inspired metadata over knowledge/bootstrap/*.jsonl, signs the
+# role files with the maintainer SSH signing key, and publishes a signed
+# knowledge release. Consumers verify with scripts/knowledge_verify.py against an
+# identity-constrained provenance (expected issuer / repo / workflow / ref).
+#
+# This workflow is itself a ROOT-OF-TRUST artifact: any change is two-party review
+# (core/promotion-policy.md, THREAT_MODEL.md §6). Third-party actions are pinned to
+# a full commit SHA. Signing is gated on the KNOWLEDGE_SIGNING_KEY secret; without
+# it the job emits bootstrap-mode (unsigned) metadata and stops before publishing —
+# it never publishes something it could not sign (fail-secure, never fetch/sign-
+# then-trust).
+
+name: release-knowledge
+
+on:
+  push:
+    tags: ["knowledge-v*"]
+  workflow_dispatch:
+    inputs:
+      revoke_version:
+        description: "Publish a revocation for this knowledge version (kill switch). Leave empty for a normal release."
+        required: false
+        default: ""
+
+# Least privilege: contents:write only to publish the release/revocation asset.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-knowledge-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-sign-publish:
+    if: ${{ github.event.inputs.revoke_version == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build TUF-inspired metadata over the packs
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, glob, datetime
+          root = "knowledge"
+          # Version is derived from the tag (knowledge-vN) or defaults to 1.
+          ref = os.environ.get("GITHUB_REF_NAME", "")
+          version = int(ref.split("knowledge-v")[-1]) if "knowledge-v" in ref else 1
+          expires = (datetime.datetime.now(datetime.timezone.utc)
+                     + datetime.timedelta(days=365)).strftime("%Y-%m-%dT00:00:00Z")
+          today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+          def sha256(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as fh:
+                  h.update(fh.read())
+              return h.hexdigest()
+
+          targets = []
+          for p in sorted(glob.glob(os.path.join(root, "bootstrap", "*.jsonl"))):
+              name = os.path.relpath(p, root)
+              targets.append({"name": name, "version": version,
+                              "previous_version": max(version - 1, 0),
+                              "sha256": sha256(p), "size": os.path.getsize(p),
+                              "valid_from": today})
+          with open(os.path.join(root, "targets.json"), "w") as fh:
+              json.dump({"_type": "targets", "spec_version": "1.0-attestarc",
+                         "version": version, "expires": expires,
+                         "targets": targets}, fh, indent=2)
+          tgt_hash = sha256(os.path.join(root, "targets.json"))
+          with open(os.path.join(root, "snapshot.json"), "w") as fh:
+              json.dump({"_type": "snapshot", "spec_version": "1.0-attestarc",
+                         "version": version, "expires": expires,
+                         "meta": {"targets.json": {"version": version,
+                                                   "sha256": tgt_hash}}}, fh, indent=2)
+          snap_hash = sha256(os.path.join(root, "snapshot.json"))
+          with open(os.path.join(root, "timestamp.json"), "w") as fh:
+              json.dump({"_type": "timestamp", "spec_version": "1.0-attestarc",
+                         "version": version, "expires": expires,
+                         "meta": {"snapshot.json": {"version": version,
+                                                    "sha256": snap_hash}}}, fh, indent=2)
+          print(f"built metadata version={version}")
+          PY
+
+      - name: Check for signing key
+        id: signing
+        run: |
+          if [ -n "${{ secrets.KNOWLEDGE_SIGNING_KEY }}" ]; then
+            echo "have_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_key=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No KNOWLEDGE_SIGNING_KEY; emitting bootstrap (unsigned) metadata and stopping before publish."
+          fi
+
+      - name: Sign role files (ssh-keygen -Y sign)
+        if: ${{ steps.signing.outputs.have_key == 'true' }}
+        env:
+          SIGNING_KEY: ${{ secrets.KNOWLEDGE_SIGNING_KEY }}
+          SIGNER_IDENTITY: ${{ secrets.KNOWLEDGE_SIGNER_IDENTITY }}
+          ALLOWED_SIGNERS: ${{ secrets.KNOWLEDGE_ALLOWED_SIGNERS }}
+        run: |
+          umask 077
+          key="$(mktemp)"
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          # Flip root.json to signed mode and record the maintainer allowed-signers.
+          python3 - <<PY
+          import json
+          with open("knowledge/root.json") as fh:
+              root = json.load(fh)
+          root["mode"] = "signed"
+          # keys/roles are provisioned from the allowed-signers material out of band;
+          # this step assumes root.json already carries the maintainer keyids/threshold.
+          with open("knowledge/root.json", "w") as fh:
+              json.dump(root, fh, indent=2)
+          PY
+          for f in timestamp.json snapshot.json targets.json; do
+            ssh-keygen -Y sign -f "$key" -n attestarc-knowledge "knowledge/$f"
+          done
+          rm -f "$key"
+          # Self-check: the produced release must verify before we publish it.
+          printf '%s\n' "$ALLOWED_SIGNERS" > knowledge/allowed_signers
+          python scripts/knowledge_verify.py verify \
+            --knowledge-root knowledge --allowed-signers knowledge/allowed_signers
+          rm -f knowledge/allowed_signers
+
+      - name: Publish signed knowledge release
+        if: ${{ steps.signing.outputs.have_key == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tar -czf knowledge-${{ github.ref_name }}.tar.gz \
+            knowledge/root.json knowledge/timestamp.json knowledge/snapshot.json \
+            knowledge/targets.json knowledge/bootstrap knowledge/*.sig
+          gh release create "${{ github.ref_name }}" \
+            "knowledge-${{ github.ref_name }}.tar.gz" \
+            --title "Knowledge ${{ github.ref_name }}" \
+            --notes "Signed knowledge plane. Verify with scripts/knowledge_verify.py; expected provenance: repo ${{ github.repository }}, workflow release-knowledge, ref ${{ github.ref }}."
+
+  revoke:
+    if: ${{ github.event.inputs.revoke_version != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Publish revocation (kill switch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVOKE_VERSION: ${{ github.event.inputs.revoke_version }}
+        run: |
+          # A revocation tells clients to disable the named version, roll back to
+          # the last-known-good bundled snapshot, and mark every finding assessed
+          # under the revoked knowledge as requires_reverification (state.py
+          # reverify re-observes the actual condition — a revocation never
+          # silently resolves a finding).
+          python3 - <<'PY'
+          import json, os, datetime
+          rec = {
+              "_type": "revocation",
+              "revoked_version": os.environ["REVOKE_VERSION"],
+              "revoked_at": datetime.datetime.now(datetime.timezone.utc)
+                              .strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "action": "disable-version; fall back to last-known-good bundled "
+                        "snapshot; mark dependent findings requires_reverification",
+          }
+          with open("revocation.json", "w") as fh:
+              json.dump(rec, fh, indent=2)
+          PY
+          gh release create "knowledge-revocation-${REVOKE_VERSION}" \
+            revocation.json \
+            --title "Knowledge revocation v${REVOKE_VERSION}" \
+            --notes "KILL SWITCH: knowledge version ${REVOKE_VERSION} is revoked. Clients disable it, roll back to last-known-good, and re-verify dependent findings."

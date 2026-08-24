@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://attestarc.dev/schemas/learning-candidate-1.json",
+  "title": "AttestArc learning candidate",
+  "description": "A proposed improvement to AttestArc itself, produced by the Evolver (a dev-time, PR-gated principal). A LearningCandidate is a PROPOSAL, never an applied change: it names what to change and why, and MUST be reviewed and merged through the normal PR + eval gate before it affects anything. It never modifies the running kernel. Secrets and private repository content MUST NOT appear anywhere in a candidate; learning defaults to local-only. Candidates are development scaffolding under evolution/ and are NOT shipped in the skill payload.",
+  "type": "object",
+  "required": ["id", "type", "change_target", "summary", "security_regression_direction"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^LC-[a-z0-9-]+$",
+      "description": "Stable candidate id, e.g. LC-gha-cache-scope-2026-06."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["new-platform-behavior", "false-positive", "false-negative",
+               "missing-evidence", "poor-remediation", "new-attack-pattern",
+               "knowledge-conflict", "methodology-gap", "helper-gap"],
+      "description": "What kind of gap the candidate addresses."
+    },
+    "change_target": {
+      "type": "string",
+      "enum": ["knowledge", "reference", "helper", "methodology"],
+      "description": "Which trust zone the change lands in. 'knowledge': a signed pack entry (data). 'reference': durable domain methodology. 'helper': a deterministic script. 'methodology': the kernel — highest-scrutiny, two-party review."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One-line statement of the proposed change. No verdict about any specific repository; no secret values."
+    },
+    "rationale": {
+      "type": "string",
+      "description": "Why the change is warranted, in terms of a reasoning gap — not a specific private finding."
+    },
+    "observation": {
+      "type": "string",
+      "description": "The sanitized, generalized observation that motivated the candidate. MUST be scrubbed of secrets and private repository content."
+    },
+    "proposed_change": {
+      "type": "string",
+      "description": "Concrete proposed edit (a knowledge entry, a reference paragraph, a helper behavior, or a methodology clause). Applied only after review."
+    },
+    "security_regression_direction": {
+      "type": "string",
+      "enum": ["positive", "neutral", "negative"],
+      "description": "Does adopting the candidate increase scrutiny (positive), keep it the same (neutral), or make a previously-flagged pattern look safe (negative)? Negative is the shape of a poisoning attempt and always requires human review."
+    },
+    "origin": {
+      "type": "string",
+      "enum": ["assessment", "user-feedback", "eval-failure", "knowledge-refresh", "manual"],
+      "description": "Where the learning came from. Never carries the raw private context."
+    },
+    "paired_evals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "description": "Eval case file name (evals/cases/<name>.yaml)."},
+          "kind": {"type": "string", "enum": ["find", "refuse", "needs-review", "historical"],
+                   "description": "The corpus role. A candidate SHOULD add a find/refuse pair; it MUST NOT weaken or delete a trusted eval."}
+        }
+      },
+      "description": "Paired evals the candidate proposes to ADD. Additive only — deletions/weakenings are two-party review (see core/promotion-policy.md)."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "proposed", "under-review", "promoted", "rejected"],
+      "description": "Lifecycle. A candidate is only ever advanced by review, never by the running assessor."
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Open namespace for tool-specific data. Secret values MUST NOT appear here."
+    }
+  }
+}

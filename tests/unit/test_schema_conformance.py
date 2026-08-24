@@ -138,6 +138,39 @@ def test_knowledge_dependency_definition(schemas_dir):
         "#/definitions/knowledge_dependency"
 
 
+# --------------------------------------------------------------------------- #
+# knowledge-plane schemas parse and carry the expected closed vocabularies.
+# --------------------------------------------------------------------------- #
+def test_all_schemas_parse(schemas_dir):
+    for name in ("findings.schema.json", "knowledge.schema.json",
+                 "knowledge-manifest.schema.json",
+                 "learning-candidate.schema.json"):
+        with open(os.path.join(schemas_dir, name)) as fh:
+            assert json.load(fh)["$id"]
+
+
+def test_learning_candidate_vocabulary(schemas_dir):
+    with open(os.path.join(schemas_dir, "learning-candidate.schema.json")) as fh:
+        schema = json.load(fh)
+    props = schema["properties"]
+    assert schema["additionalProperties"] is False
+    assert set(props["change_target"]["enum"]) == {
+        "knowledge", "reference", "helper", "methodology"}
+    assert set(props["security_regression_direction"]["enum"]) == {
+        "positive", "neutral", "negative"}
+    # a candidate is a proposal: direction must be declared up front.
+    assert "security_regression_direction" in schema["required"]
+
+
+def test_knowledge_manifest_role_types(schemas_dir):
+    with open(os.path.join(schemas_dir, "knowledge-manifest.schema.json")) as fh:
+        schema = json.load(fh)
+    consts = {branch["$ref"].split("/")[-1] for branch in schema["oneOf"]}
+    assert consts == {"root", "timestamp", "snapshot", "targets"}
+    assert schema["definitions"]["root"]["properties"]["mode"]["enum"] == [
+        "bootstrap", "signed"]
+
+
 def test_assessor_safety_event_has_content_hash(schemas_dir):
     props = _load_schema(schemas_dir)["definitions"]["assessor_safety_event"]["properties"]
     assert "content_hash" in props
