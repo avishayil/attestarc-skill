@@ -28,8 +28,15 @@ The primary rule:
 
 ## 2. Trust zones
 
-AttestArc is partitioned into three zones. The boundary between them is enforced in
-**code and process**, not merely in prompt text.
+AttestArc is partitioned into three zones. The kernel/knowledge boundary is
+enforced in **code** (the assessor reads knowledge only through a verify-gate, its
+helpers contain no network code, and the kernel is not writable at assessment time)
+and in **process** (reviewed PRs, two-party review for root-of-trust files). The
+separation of the *principals* (§3) is **structural and documented**, not an
+in-session sandbox: a host that pre-approves a tool (Claude Code `allowed-tools`,
+Cursor) does not remove it, so AttestArc cannot claim to strip the network from a
+running session. Instead the assessor path simply contains no fetch step, and
+ingestion lives upstream (§3, §4).
 
 ### 2.1 KERNEL — highly trusted
 
@@ -44,12 +51,15 @@ remediation, promotion-policy), the verification helpers (`scripts/knowledge_ver
 
 ### 2.2 VERIFIED KNOWLEDGE — trusted for reasoning
 
-Signed, versioned, temporal, provenance-backed knowledge packs (`knowledge/`).
+Attested, versioned, temporal, provenance-backed knowledge packs (`knowledge/`).
 
-- MAY be refreshed automatically by the Updater principal (§3), never by the
-  Assessor.
-- Trusted for reasoning ONLY after passing the full verification chain (§4).
-- Every entry MUST carry provenance and a valid threshold signature.
+- MAY be refreshed by the Updater principal (§3), never by the Assessor.
+- Trusted for reasoning ONLY after passing the verification chain (§4): the
+  in-package snapshot is bootstrap-trusted (it rode in on the signed skill
+  release); a refreshed snapshot is trusted only if persistent client state records
+  that its exact version + manifest digest was attestation-verified.
+- Every entry MUST carry provenance (a registry-derived source, bound to a fetched
+  object), and the pack set is only trusted after `check_consistency` passes.
 
 ### 2.3 CANDIDATE KNOWLEDGE — untrusted
 
@@ -76,29 +86,40 @@ The Assessor and the Updater are separated precisely so that a malicious reposit
 cannot turn the security-assessment path into a network egress or data-exfiltration
 channel.
 
-## 4. Update security (TUF-inspired)
+## 4. Update security (attestation-based)
 
-Knowledge packs are distributed and verified like software updates, using the
-separation-of-roles / threshold / expiry / anti-rollback ideas from The Update
-Framework. The client (`knowledge_verify.py`) MUST verify **before use**:
+The root of trust is an **external anchor** that ships inside the SSH-signed skill
+release — `knowledge/trust-anchor.json` — and lives OUTSIDE any downloaded bundle.
+It pins the Sigstore build-provenance identity (repo + signer workflow + OIDC
+issuer) that an official knowledge bundle must have been produced under. A bundle
+can therefore never declare its own trust; the homemade root/timestamp/snapshot/
+targets role-file protocol is gone.
+
+Two verification entry points in `knowledge_verify.py`:
 
 ```
-trusted root
-  → signature threshold satisfied   (ssh-keygen -Y verify; no Python crypto dep)
-  → timestamp fresh                 (not expired)
-  → snapshot consistent             (references the targets)
-  → target hash + size match
-  → version monotonic               (reject rollback / freeze)
-  → load
+verify_download  (Updater; network/gh)          verify_installed (Assessor; no network/gh)
+  gh attestation verify <manifest>                is the root the in-package snapshot?
+    --repo / --signer-workflow / --issuer           → yes: bootstrap-trusted (integrity only)
+  → identity matches trust-anchor?                  → no:  trusted ONLY if client state records
+  → manifest pack hashes + no undeclared pack             this version+digest was attested
+  → fresh (short TTL; freeze protection)          → pack hashes + no undeclared pack
+  → version > client_state.highest_version        → not revoked
+  → prev_digest chains to installed LKG           → else untrusted
+  → not revoked
+  ANY failure → DISCARD the download (keep LKG)
 ```
 
 This defends against: knowledge tampering, rollback to vulnerable knowledge, freeze
-on a stale version, a single compromised signing key (threshold), mix-and-match of
-knowledge files, and a malicious mirror.
-
-Signatures MUST be identity-constrained (expected issuer, source repository, release
-workflow, ref) — the existence of a valid signature is not sufficient. Root keys are
-the maintainer SSH public keys recorded as allowed-signers in `knowledge/root.json`.
+on a stale version, a forged bundle (no valid attestation), mix-and-match of files
+(the attestation covers the manifest, which pins every pack), and a malicious
+mirror. Trust is **identity-constrained** by construction — a valid attestation for
+some *other* repo/workflow does not satisfy the anchor. Fail-secure means the failed
+download is discarded entirely; no metadata from it participates in a fallback, and
+the independently-verified last-known-good is retained. Attestation verification
+shells out to the system `gh attestation verify` (no Python crypto dependency;
+mirrors the `ssh-keygen` shell-out convention) and is required only in the Updater
+path — the Assessor verifies against recorded client state with no network or `gh`.
 
 ## 5. Fail-secure runtime policy
 
@@ -106,9 +127,11 @@ The runtime NEVER fetches-then-trusts. On any anomaly it degrades safely:
 
 | Condition | Response |
 |-----------|----------|
-| Signature invalid | **Reject** the pack |
-| Knowledge expired | Use last-known-good bundled snapshot + warn |
-| Knowledge unavailable | Use bundled snapshot |
+| Attestation absent / identity mismatch (download) | **Discard** the download; keep the installed last-known-good |
+| Manifest/pack tampered, rolled back, or frozen (expired) | **Discard** the download; keep the installed last-known-good |
+| Downloaded bundle presents `mode: bootstrap` | **Reject** — bootstrap is valid ONLY for the in-package snapshot |
+| Installed knowledge expired | Warn; the in-package snapshot remains bootstrap-usable |
+| Knowledge unavailable | Fall back to the in-package snapshot |
 | Knowledge conflict (authoritative vs authoritative) | `status: disputed` → downgrade dependent conclusions to `needs_review` |
 | Source unavailable | Do not invent an answer |
 | Unknown platform/version | `needs_review` |
@@ -123,14 +146,18 @@ reasonable."
 Promotion from candidate to verified is **deterministic** (`core/promotion-policy.md`).
 The LLM may *propose*; it may never `promote()`.
 
-- **Auto-promote** — authoritative vendor doc/changelog + structured claim + no
-  conflict + evals pass + valid signature + not a security-*negative* change.
+- **Auto-promote** — authoritative vendor doc/changelog + structured claim +
+  provenance bound to a quarantined object + no conflict + no supersede of an
+  active claim + evals pass + not a security-*negative* change.
 - **Require review (PR)** — changes reachability/severity semantics, or is
   security-negative (i.e. previously-vulnerable becomes "safe" — the exact shape a
   poisoning attempt takes).
 - **Two-party review** — changes to root-of-trust files: `core/agent-safety.md`,
-  `core/promotion-policy.md`, `scripts/knowledge_verify.py`, `knowledge/root.json`,
-  the release workflow, or **any weakening/deletion of a trusted eval**.
+  `core/promotion-policy.md`, `scripts/knowledge_verify.py`, `scripts/knowledge.py`,
+  `scripts/knowledge_compile.py`, `knowledge/sources.yaml`,
+  `knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json`,
+  `schemas/learning-candidate.schema.json`, `.github/workflows/release-knowledge.yml`,
+  or **any weakening/deletion of a trusted eval**.
 - **Never auto-promote** — blog / issue / researcher post / model inference →
   candidate only.
 
@@ -141,7 +168,8 @@ find/refuse evals but MUST NOT weaken or delete trusted evals in the same trust 
 ## 7. Findings, provenance, and invalidation
 
 - Every finding derived from a knowledge entry MUST record its
-  `knowledge_dependencies` (`{id, version|content_hash}`).
+  `knowledge_dependencies` (`{id, content_hash}`; `content_hash` is REQUIRED — an
+  id alone cannot reliably invalidate a finding when the underlying claim changes).
 - When a dependency is superseded/revoked, dependent findings surface
   `requires_reverification` (a read-time view; stored status is never silently
   mutated). A knowledge change MUST NEVER auto-resolve a finding.

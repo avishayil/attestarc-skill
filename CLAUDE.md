@@ -56,16 +56,20 @@ engine. Helpers are **stdlib-only** — no third-party runtime dependencies.
   platform facts (version-specific defaults, API response semantics, dated
   guidance) belong in `knowledge/`, cross-referenced by entry id — the same
   deferral pattern the domain files already use for `threats/`.
-- `knowledge/` is the **verified-knowledge plane**: signed, versioned, temporal,
+- `knowledge/` is the **verified-knowledge plane**: attested, versioned, temporal,
   provenance-backed platform facts shipped as JSONL packs (`knowledge/bootstrap/`)
-  plus TUF-inspired metadata (`root.json`/`timestamp.json`/`snapshot.json`/
-  `targets.json`) and a source registry (`sources.yaml`). Trusted for reasoning
-  ONLY after `scripts/knowledge_verify.py` passes the full verification chain; the
-  Assessor reads it read-only and never over the network.
+  pinned by `manifest.json`, plus an external `knowledge/trust-anchor.json` (the root
+  of trust — pinned Sigstore/OIDC identity, shipped in the signed skill release, never
+  overwritten by a refresh) and an identity-scoped source registry (`sources.yaml`).
+  Trusted for reasoning ONLY after `scripts/knowledge_verify.py` passes verification;
+  the Assessor reads it read-only and never over the network.
 - `scripts/` contain deterministic, stdlib-only helpers (facts, not verdicts),
-  including `knowledge.py` (lookup/status/explain — no network) and
-  `knowledge_verify.py` (TUF-inspired verification). Signature verification shells
-  out to the system `ssh-keygen -Y verify`; no Python crypto dependency.
+  including `knowledge.py` (lookup/status/explain, `applies_to` scoping, verify-gated
+  `open_verified` — no network) and `knowledge_verify.py` (attestation-based
+  verification: `verify` for the installed snapshot, `verify-download` for the
+  Updater). Attestation verification shells out to the system `gh attestation verify`
+  (and `ssh-keygen -Y verify` where a raw signature is checked); no Python crypto
+  dependency.
 - `schemas/findings.schema.json` defines persistent finding state;
   `schemas/knowledge*.schema.json` and `schemas/learning-candidate.schema.json`
   define the knowledge plane and evolution inputs.
@@ -93,12 +97,14 @@ Core invariants:
   repository content must never enter the learning pipeline.
 - Nothing learned at runtime may modify the trusted kernel; the running assessor
   can never grant itself more trust.
-- Verified knowledge requires provenance and a valid threshold signature; candidate
-  knowledge may shape investigation questions but MUST NOT change a conclusion.
+- Verified knowledge requires provenance and a valid attestation whose identity
+  matches the external trust anchor; candidate knowledge may shape investigation
+  questions but MUST NOT change a conclusion.
 - A knowledge change never silently resolves a finding — it marks dependents for
   re-verification, which re-observes the actual condition.
-- Fail secure: bad signature rejects; expired/unavailable knowledge falls back to
-  the last-known-good bundled snapshot; conflict or unknown version routes to
+- Fail secure: a download with no valid attestation (or a tampered/rolled-back/frozen
+  one) is discarded and the installed last-known-good retained; expired/unavailable
+  knowledge falls back to the in-package snapshot; conflict or unknown version routes to
   `needs_review`. Never fetch-then-trust.
 
 Keep the implementation simple.

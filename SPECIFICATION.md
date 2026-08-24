@@ -79,9 +79,9 @@ normative:
   assessment; it changes only through reviewed pull requests (§21, §22).
 - `knowledge/` — the **verified-knowledge plane**: volatile platform facts
   (version-specific defaults, API response semantics, dated guidance) shipped as
-  signed, versioned, temporal, provenance-backed JSONL packs plus TUF-inspired
-  metadata (§23). Trusted for reasoning only after verification; the Assessor
-  reads it read-only and never over the network.
+  attested, versioned, temporal, provenance-backed JSONL packs plus a `manifest.json`
+  pinning every pack and an external `trust-anchor.json` (§23). Trusted for reasoning
+  only after verification; the Assessor reads it read-only and never over the network.
 - `references/` — **expertise**: durable domain knowledge that teaches the Host
   how to *investigate* a domain (objectives, what to inspect, how to reason
   about exploitability and false positives). References SHALL teach
@@ -104,7 +104,7 @@ normative:
     kernel files that apply to every domain and are always loaded.
 - `scripts/` — **deterministic facts**: primitives that produce structured
   observations, including the knowledge helpers `knowledge.py` (lookup/status/
-  explain) and `knowledge_verify.py` (TUF-inspired verification). See §12, §23.
+  explain) and `knowledge_verify.py` (attestation-based verification). See §12, §23.
 - `schemas/` — **contracts**: machine-readable resources (the findings schema and
   the knowledge/manifest/learning-candidate schemas).
 - The Host LLM — **judgment**: deciding what the facts mean.
@@ -146,8 +146,9 @@ attestarc-skill/
 │   └── threats/              # ci-cd-threats, source-integrity, identity,
 │                             # supply-chain (portable attack-class catalog)
 ├── knowledge/                # VERIFIED KNOWLEDGE plane (§23)
-│   ├── sources.yaml          #   authoritative source registry + authority tiers
-│   ├── root.json ...         #   TUF-inspired metadata (root/timestamp/snapshot/targets)
+│   ├── sources.yaml          #   authoritative source registry (origin + identity)
+│   ├── trust-anchor.json     #   external anchor: pinned repo/workflow/OIDC identity
+│   ├── manifest.json         #   version, expiry, prev_digest, per-pack {sha256,size}
 │   └── bootstrap/*.jsonl     #   last-known-good packs shipped in the payload
 ├── scripts/                  # state.py, discover_repo.py, inspect_workflows.py,
 │                             # inspect_git_diff.py, knowledge.py,
@@ -846,8 +847,9 @@ operations, NOT background monitoring or a hosted update service. Auto-generated
 evals (§24) remain **structured specs run interactively**; no eval-runner engine
 is introduced. The knowledge helpers `knowledge.py`/`knowledge_verify.py` emit
 facts and verification results, NOT verdicts, and MUST NOT accrete assessment
-logic. Cryptographic verification shells out to a system tool (`ssh-keygen -Y
-verify`); AttestArc MUST NOT bundle a crypto library or third-party runtime
+logic. Cryptographic verification shells out to a system tool (`gh attestation
+verify` for downloaded bundles; `ssh-keygen -Y verify` where a raw signature is
+checked); AttestArc MUST NOT bundle a crypto library or third-party runtime
 dependency.
 
 ## 17. Architectural constraint (north star)
@@ -967,26 +969,37 @@ Knowledge is temporal, not merely true/false. A lookup SHALL honor `valid_from`,
 finding is judged under the semantics that applied when the observed configuration
 was in force — not today's semantics applied backward.
 
-### 23.3 Update security (TUF-inspired)
+### 23.3 Update security (attestation-based)
 
-Packs are distributed and verified like software updates. `knowledge/` ships
-TUF-inspired metadata (`root.json`, `timestamp.json`, `snapshot.json`,
-`targets.json`) with separated roles, signature thresholds, and expiry. Before use,
-`scripts/knowledge_verify.py` SHALL verify, in order: trusted root → signature
-threshold satisfied → timestamp fresh → snapshot consistent → target hash and size
-match → version monotonic (**rollback/freeze rejected**) → load. Signature
-verification shells out to the system `ssh-keygen -Y verify` against the allowed-
-signers in `root.json` (maintainer SSH keys); no Python crypto dependency is
-introduced. Signatures SHALL be identity-constrained (expected issuer, source
-repository, release workflow, ref); a merely-valid signature is insufficient. A
-compromised version SHALL be revocable via a kill switch (`THREAT_MODEL.md` §8):
-clients disable it, roll back to the last verified snapshot, and mark findings
+The root of trust is an **external anchor** (`knowledge/trust-anchor.json`) that
+ships inside the SSH-signed skill release and lives OUTSIDE any downloaded bundle;
+it pins the Sigstore build-provenance identity (repo + signer workflow + OIDC
+issuer) an official bundle must have been produced under. A bundle can therefore
+never declare its own trust, and the in-package snapshot is bootstrap-trusted ONLY
+because it rode in on the attested skill release. Upstream CI attests
+`knowledge/manifest.json` (version, expiry, `prev_digest`, per-pack `{sha256,size}`)
+with GitHub Artifact Attestations. `scripts/knowledge_verify.py` provides two entry
+points: `verify_download` (Updater; runs `gh attestation verify` against the anchor
+identity, then checks manifest pack integrity, freshness/anti-freeze, monotonic
+version vs persistent client state, `prev_digest` chaining, and revocation — **any
+failure discards the download and retains the installed last-known-good**) and
+`verify_installed` (Assessor; no network or `gh`, trusts the in-package snapshot as
+bootstrap or a refreshed snapshot only if client state records its exact
+version+digest was attested). A downloaded bundle declaring `mode: bootstrap` is
+rejected. Attestation verification shells out to `gh attestation verify` (no Python
+crypto dependency; mirrors the `ssh-keygen` convention). Trust is
+identity-constrained by construction: a valid attestation for another repo/workflow
+does not satisfy the anchor. A compromised version SHALL be revocable via a kill
+switch (`THREAT_MODEL.md` §8): the revocation is itself attested; clients verify it,
+disable the version, roll back to the last verified snapshot, and mark findings
 assessed under it `requires_reverification`.
 
 ### 23.4 Findings ↔ knowledge dependencies
 
 A finding derived from a knowledge entry SHALL record `knowledge_dependencies`
-(array of `{id, version | content_hash}`). When a dependency is superseded or
+(array of `{id, content_hash}`; `content_hash` is REQUIRED, since an id alone
+cannot reliably invalidate a finding when the underlying claim changes). When a
+dependency is superseded or
 revoked, `state.py reverify` SHALL identify the dependent findings and `list`/`get`
 SHALL surface a read-time `requires_reverification: true` view; the stored `status`
 is never silently mutated, and a knowledge change MUST NEVER auto-resolve a finding.
@@ -1021,15 +1034,21 @@ shipped in the payload.
 ### 24.2 Promotion policy
 
 Promotion from candidate to verified is **deterministic** (`core/promotion-policy.md`);
-the LLM may propose but never promote. Tiers: **auto-promote** (authoritative
-vendor doc/changelog + structured claim + no conflict + evals pass + valid
-signature + not security-negative); **require review** (changes to reachability or
-severity semantics, or any security-*negative* change where previously-vulnerable
-becomes "safe"); **two-party review** (root-of-trust files: `core/agent-safety.md`,
-`core/promotion-policy.md`, `scripts/knowledge_verify.py`, `knowledge/root.json`,
-the release workflow, or any eval weakening/deletion); **never auto-promote**
-(blog/issue/researcher/model inference → candidate only). Authority is assigned by
-`knowledge/sources.yaml`, never by the model.
+the LLM may propose but never promote. Every promotion fact is **derived**, not
+asserted by the caller: authority/type/publisher come from reclassifying the
+candidate's source URLs through the registry, conflict from the current verified
+set, and root-of-trust/eval-weakening from a path classifier over the proposed
+diff. Tiers: **auto-promote** (authoritative vendor doc/changelog + structured
+claim + provenance bound to a quarantined object + no conflict + does not supersede
+an active claim + evals pass + not security-negative); **require review** (supersedes
+or conflicts with an active claim, changes reachability or severity semantics, or
+any security-*negative* change where previously-vulnerable becomes "safe");
+**two-party review** (root-of-trust files: `core/agent-safety.md`,
+`core/promotion-policy.md`, `scripts/knowledge_verify.py`, `scripts/knowledge.py`,
+`scripts/knowledge_compile.py`, `knowledge/sources.yaml`, `knowledge/trust-anchor.json`,
+`schemas/knowledge*.schema.json`, the release workflow, or any eval weakening/
+deletion); **never auto-promote** (blog/issue/researcher/model inference → candidate
+only). Authority is assigned by `knowledge/sources.yaml`, never by the model.
 
 ### 24.3 Eval-gated evolution
 

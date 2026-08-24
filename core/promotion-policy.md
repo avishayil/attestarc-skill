@@ -17,9 +17,11 @@ deterministic decision made by policy over facts, gated by review and evals.
 ## Inputs the policy reads (never model opinion)
 
 - **Source authority** — an integer assigned by the source registry
-  (`knowledge/sources.yaml`), never chosen by the model. Tiers: vendor docs 100,
-  vendor changelog 95, vendor repo 90, standard 90, security org 80, research 60,
-  issue 40, community 20, arbitrary web 0.
+  (`knowledge/sources.yaml`) and **derived** by reclassifying each source URL
+  (HTTPS-only, origin + path-prefix scoped), never chosen or asserted by the model.
+  A candidate whose declared authority/publisher/type disagrees with the derived
+  values is rejected. Tiers: vendor docs 100, vendor changelog 95, vendor repo 90,
+  standard 90, security org 80, research 60, issue 40, community 20, arbitrary web 0.
 - **Claim structure** — did slot extraction produce a well-formed
   `KnowledgeEntry` (schema-valid, `applies_to` bound, temporal fields present)?
 - **Conflict** — does the claim contradict an existing *authoritative* entry?
@@ -29,24 +31,31 @@ deterministic decision made by policy over facts, gated by review and evals.
   is the exact shape a poisoning attempt takes.
 - **Eval result** — does the full corpus (existing + any paired evals shipped
   with the change) pass?
-- **Signature** — for published packs, a valid threshold signature and
-  identity-constrained provenance (`scripts/knowledge_verify.py`).
+- **Provenance / attestation** — for published packs, a valid Sigstore
+  build-provenance attestation whose identity matches the external trust anchor
+  (`knowledge/trust-anchor.json`), verified via `gh attestation verify` in
+  `scripts/knowledge_verify.py`. The provenance of a *candidate* is bound to a
+  quarantine receipt over the fetched object.
 
 ## Promotion tiers
 
-**Auto-promote** — all of: authoritative source (authority ≥ 90) + well-formed
-structured claim + no conflict with an authoritative entry + evals pass + (for
-published packs) valid signature + direction is **not** security-negative.
+**Auto-promote** — all of: authoritative source (derived authority ≥ 90) +
+well-formed structured claim bound to a quarantine receipt + no conflict with an
+authoritative entry + does not supersede an active claim + evals pass + (for
+published packs) a valid attestation + direction is **not** security-negative.
 
-**Require review (single-maintainer PR)** — any of: the change alters
-reachability or severity semantics; the direction is **security-negative**
-(previously-vulnerable → "safe"); a conflict with an existing authoritative entry
-must be adjudicated (→ `disputed` until resolved).
+**Require review (single-maintainer PR)** — any of: the change supersedes or
+conflicts with an existing active/authoritative claim (a conflict is adjudicated →
+`disputed` until resolved); the change alters reachability or severity semantics;
+the direction is **security-negative** (previously-vulnerable → "safe").
 
 **Two-party review** — any change to a root-of-trust file:
 `core/agent-safety.md`, `core/promotion-policy.md`, `scripts/knowledge_verify.py`,
-`knowledge/root.json`, the release workflow (`.github/workflows/release-knowledge.yml`),
-**or any weakening or deletion of a trusted eval.**
+`scripts/knowledge.py`, `scripts/knowledge_compile.py`, `knowledge/sources.yaml`,
+`knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json`,
+`schemas/learning-candidate.schema.json`, the release workflow
+(`.github/workflows/release-knowledge.yml`), **or any weakening or deletion of a
+trusted eval.**
 
 **Never auto-promote** — blog post, issue comment, researcher claim, forum post,
 or model inference. These are recorded as **candidate** only. Candidate knowledge
