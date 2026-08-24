@@ -183,19 +183,21 @@
         <p class="muted reveal">The root of trust is an <strong>external anchor</strong>
           (<code>knowledge/trust-anchor.json</code>) that ships inside the SSH-signed skill release and
           lives <em>outside</em> any downloaded bundle. It pins the Sigstore build-provenance identity
-          (repo + signer workflow + OIDC issuer) an official bundle must have been produced under — so a
+          (repo + signer workflow + the reviewed git <em>ref</em> + OIDC issuer) an official bundle must
+          have been produced under — the identity check binds the certificate's trailing <code>@&lt;ref&gt;</code>,
+          not just the workflow path, so an attestation minted from an unreviewed branch is rejected — and a
           bundle can never declare its own trust. Verification shells out to the system
           <code>gh attestation verify</code> (no crypto dependency of our own). There are two entry
           points, and they are deliberately asymmetric:</p>
 
         <div class="flow-cols reveal"
              role="img"
-             aria-label="Two verification paths. verify_download runs in the Updater with network and gh: attestation identity must match the anchor, then manifest pack hashes, freshness, monotonic version versus client state, prev_digest chaining, and revocation; any failure discards the download and keeps the last-known-good. verify_installed runs in the Assessor with no network: the in-package snapshot is bootstrap-trusted for integrity, a refreshed snapshot is trusted only if persistent client state records that its exact version and digest was attested.">
+             aria-label="Two verification paths. verify_download runs in the Updater with network and gh: the archive and the manifest attestation identity must match the anchor (binding both the workflow path and the git ref), then manifest pack hashes, freshness, monotonic version versus client state, prev_digest chaining, and revocation; any failure discards the download and keeps the last-known-good. verify_installed runs in the Assessor with no network: the in-package snapshot is bootstrap-trusted for integrity, a refreshed snapshot is trusted only if persistent client state records that its exact version and digest was attested.">
           <div class="flow">
             <span class="step-label">verify_download</span>
             <h3>Updater · network / gh</h3>
             <ol>
-              <li><code>gh attestation verify &lt;manifest&gt;</code> — identity matches the anchor (repo + signer workflow + issuer)?</li>
+              <li><code>gh attestation verify</code> the archive <em>and</em> the manifest — identity matches the anchor (repo + workflow path + git ref + issuer)?</li>
               <li>Manifest pack hashes match, and no <em>undeclared</em> pack sits in the tree.</li>
               <li>Fresh — short TTL, freeze protection.</li>
               <li>Version &gt; the client's recorded <code>highest_version</code>.</li>
@@ -231,7 +233,8 @@
 
         <p class="muted reveal" style="margin-top:1.5rem"><strong>Verify → install → persist.</strong>
           Advancing the high-water mark is done by exactly one path — <code>install</code> — so a bundle can
-          never verify while state is left half-advanced. It <strong>safe-extracts</strong> an archive
+          never verify while state is left half-advanced. It <strong>verifies the archive's own
+          attestation before extracting it</strong>, then <strong>safe-extracts</strong> the archive
           (refusing absolute paths, <code>..</code>, and symlink/hardlink members <em>before</em> writing
           anything, and extracting member-by-member rather than <code>extractall</code>), re-verifies the
           staged bytes, atomically renames the snapshot into place, and only then atomically advances client
@@ -289,7 +292,7 @@
           <article class="card reveal"><h3>A trust-split brain</h3><p>The security-relevant reasoning corpus is partitioned Kernel / Verified / Candidate, and the boundary is enforced in code and process — not in prompt text.</p></article>
           <article class="card reveal"><h3>Verification is a fact, not a verdict</h3><p>The helpers emit checks and facts; they never render a security judgment. Verified knowledge drives conclusions only after the verify-gate; candidate knowledge only shapes questions.</p></article>
           <article class="card reveal"><h3>Derived, not asserted, authority</h3><p>A source's authority is re-derived by reclassifying its URL through an identity-scoped registry. A candidate that self-declares its authority is rejected if it disagrees.</p></article>
-          <article class="card reveal"><h3>An external attestation anchor</h3><p>The pinned Sigstore identity lives outside every downloadable bundle, so a bundle can never declare its own trust. Sigstore build-provenance replaces a homemade role protocol.</p></article>
+          <article class="card reveal"><h3>An external attestation anchor</h3><p>The pinned Sigstore identity lives outside every downloadable bundle, so a bundle can never declare its own trust. It binds the workflow path <em>and</em> the git ref, and the release workflow refuses to sign a commit that isn't contained in reviewed <code>main</code> (an ancestry gate) — so provenance can't be minted from an unreviewed ref. Sigstore build-provenance replaces a homemade role protocol.</p></article>
           <article class="card reveal"><h3>Bootstrap vs verified-LKG</h3><p>The in-package snapshot is bootstrap-trusted; a refreshed one is trusted only if the client's own out-of-band memory records that exact version + digest was attested.</p></article>
           <article class="card reveal"><h3>Direction over confidence</h3><p>A high-authority source proposing a security-<em>negative</em> or merely <em>uncertain</em> change still gets human review. The direction is <em>derived</em> from the claim's effect and its diff against the last released snapshot — never read from a model-controlled field — and an additive edit of an active entry routes to review even without an explicit supersede.</p></article>
           <article class="card reveal"><h3>Self-verifying quarantine receipts</h3><p>Fetched documents are stored by content hash with a receipt binding the object to derived provenance, and treated as inert data — never as instructions. Resolving a receipt re-hashes the stored bytes and re-classifies its final URL, so a fabricated receipt does not resolve and a cross-origin redirect is rejected. Every promotion-eligible source must carry one.</p></article>

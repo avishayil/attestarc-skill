@@ -116,18 +116,23 @@ channel.
 
 The root of trust is an **external anchor** that ships inside the SSH-signed skill
 release — `knowledge/trust-anchor.json` — and lives OUTSIDE any downloaded bundle.
-It pins the Sigstore build-provenance identity (repo + signer workflow + OIDC
-issuer) that an official knowledge bundle must have been produced under. A bundle
-can therefore never declare its own trust; the homemade root/timestamp/snapshot/
+It pins the Sigstore build-provenance identity (repo + signer workflow + the
+reviewed git **ref** + OIDC issuer) that an official knowledge bundle must have been
+produced under. The identity is enforced by `cert_identity_regexp`, which binds the
+certificate SAN's trailing `@<ref>` — not merely the workflow path — to the reviewed
+refs only (the release tag `refs/tags/knowledge-v<N>` and the dispatch ref
+`refs/heads/main`), so an attestation minted from an unreviewed branch does not
+satisfy the anchor even though the workflow file is identical. A bundle can
+therefore never declare its own trust; the homemade root/timestamp/snapshot/
 targets role-file protocol is gone.
 
 Two verification entry points in `knowledge_verify.py`:
 
 ```
 verify_download  (Updater; network/gh)          verify_installed (Assessor; no network/gh)
-  gh attestation verify <manifest>                is the root the in-package snapshot?
-    --repo / --signer-workflow / --issuer           → yes: bootstrap-trusted (integrity only)
-  → identity matches trust-anchor?                  → no:  trusted ONLY if client state records
+  gh attestation verify <archive>+<manifest>      is the root the in-package snapshot?
+    --repo / --cert-identity-regex / --issuer       → yes: bootstrap-trusted (integrity only)
+    (SAN binds workflow path AND git ref)         → no:  trusted ONLY if client state records
   → manifest pack hashes + no undeclared pack             this version+digest was attested
   → fresh (short TTL; freeze protection)          → pack hashes + no undeclared pack
   → version > client_state.highest_version        → not revoked
@@ -154,12 +159,16 @@ high-water mark and installing a snapshot is done by exactly one path,
 state half-advanced (the earlier TOCTOU where a bundle verified but nothing
 installed is closed). `install`:
 
-1. If `<bundle>` is an archive, **safe-extract** it (`_pathsafe.safe_extract_tar`,
-   itself root-of-trust) into a private staging dir — refusing absolute paths, `..`
-   traversal, and every non-regular member (symlink/hardlink/device/fifo) *before*
-   writing anything, and extracting member-by-member with our own IO (never
-   `tarfile.extractall`) so a malicious archive can neither escape staging nor plant
-   a link a later member follows out of it.
+1. If `<bundle>` is an archive, **verify the archive's own attestation first**
+   (the published `.tar.gz` is attested at release time alongside the manifest), so
+   unattested bytes never reach the tar reader; then **safe-extract** it
+   (`_pathsafe.safe_extract_tar`, itself root-of-trust) into a private staging dir —
+   refusing absolute paths, `..` traversal, and every non-regular member
+   (symlink/hardlink/device/fifo) *before* writing anything, and extracting
+   member-by-member with our own IO (never `tarfile.extractall`) so a malicious
+   archive can neither escape staging nor plant a link a later member follows out of
+   it. (The archive pre-check is skipped only for an offline install, where the
+   manifest attestation + pack integrity still gate the result.)
 2. Run `verify_download` (attestation + integrity + freshness + rollback +
    `prev_digest` chain + revocation). Any failure → `discard`, nothing installed.
 3. Copy **only** the manifest and the declared packs into `snapshots/vN.tmp`,
@@ -176,6 +185,24 @@ legitimately starts at an empty floor); a *present-but-corrupt* state file means
 rollback memory was lost or tampered, so it is marked `_corrupt` and `install` /
 `verify_and_apply_revocation` **refuse to advance** until an explicit reinit, and
 the Assessor falls back to the in-package bootstrap.
+
+**Release provenance (producer side).** The one workflow that can mint a trusted
+attestation, `.github/workflows/release-knowledge.yml`, is itself root-of-trust and
+constrains what it will sign: (1) an **ancestry gate** (`git merge-base
+--is-ancestor "$GITHUB_SHA" origin/main`) refuses to build unless the triggering
+commit is contained in `main`'s reviewed history, so a `knowledge-v*` tag on an
+unreviewed commit — or a revocation dispatched from an unreviewed branch — never
+reaches the attest step; (2) **both** the `manifest.json` **and** the published
+`.tar.gz` are attested and self-verified (`gh attestation verify` against the exact
+triggering ref) *before* publishing — fail-secure, never publish-then-trust;
+(3) the builder populates `prev_digest` by fetching the immediately-preceding
+release's manifest and recording its sha256, so the forward chain the client checks
+is real rather than always-null; (4) the kill switch emits `revoked_versions: [N]`
+(a non-empty list of positive ints — the shape the client validates), attested
+exactly like a bundle; and (5) the third-party attestation action is pinned to a
+full commit SHA, set/verified in the two-party review that gates this file. These
+are producer-side constraints; the client still independently verifies every
+downloaded artifact against the anchor.
 
 ## 5. Fail-secure runtime policy
 

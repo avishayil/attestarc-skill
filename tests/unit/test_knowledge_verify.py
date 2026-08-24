@@ -352,6 +352,27 @@ def test_install_from_targz_archive(tmp_path, monkeypatch):
     assert kv.load_client_state(anchor)["current"]["manifest_sha256"] == digest
 
 
+def test_install_archive_refused_when_archive_attestation_fails(tmp_path,
+                                                                monkeypatch):
+    # The archive's OWN attestation is verified before extraction; an unattested
+    # archive is refused and never reaches the tar reader or advances state.
+    import tarfile
+    root, _ = _make_root(tmp_path, version=9)
+    archive = str(tmp_path / "bundle.tar.gz")
+    with tarfile.open(archive, "w:gz") as tf:
+        tf.add(root, arcname="bundle")
+    monkeypatch.setattr(kv, "_gh_attest_verify",
+                        lambda *a, **k: (False, "no attestation over archive"))
+    anchor = _anchor(tmp_path)
+    anchor["snapshots_dir"] = str(tmp_path / "snaps")
+    result = kv.install(archive, anchor=anchor,
+                        client_state={"highest_version": 0, "current": None,
+                                      "revoked_versions": [], "history": []})
+    assert result["trusted"] is False and result["action"] == "discard"
+    assert "archive attestation failed" in result["reason"]
+    assert kv.load_client_state(anchor)["highest_version"] == 0
+
+
 # --------------------------------------------------------------------------- #
 # verify_and_apply_revocation — the ONLY public revocation path
 # --------------------------------------------------------------------------- #

@@ -99,9 +99,9 @@ in `scripts/knowledge_verify.py`:
 
 ```
 verify_download  (Updater; network/gh)          verify_installed (Assessor; no network/gh)
-  gh attestation verify <manifest>                is the root the in-package snapshot?
-    --repo / --signer-workflow / --issuer           → yes: bootstrap-trusted (integrity only)
-  → identity matches trust-anchor?                  → no:  trusted ONLY if client state records
+  gh attestation verify <archive>+<manifest>      is the root the in-package snapshot?
+    --repo / --cert-identity-regex / --issuer       → yes: bootstrap-trusted (integrity only)
+    (SAN binds workflow path AND git ref)         → no:  trusted ONLY if client state records
   → manifest pack hashes + no undeclared pack             this version+digest was attested
   → fresh (short TTL; freeze protection)          → pack hashes + no undeclared pack
   → version > client_state.highest_version        → not revoked
@@ -112,7 +112,8 @@ verify_download  (Updater; network/gh)          verify_installed (Assessor; no n
 
 `verify_download` decides *whether* a bundle may be installed and mutates nothing.
 Actually installing it and advancing the high-water mark is done by exactly one
-path — `knowledge_verify.py install` — which **safe-extracts** an archive (refusing
+path — `knowledge_verify.py install` — which **verifies the archive's own
+attestation before extracting it**, then **safe-extracts** the archive (refusing
 absolute paths, `..`, and symlink/hardlink members before writing anything),
 re-verifies the staged bytes, atomically renames the snapshot into place, and only
 then atomically advances client state. Rollback memory (`~/.attestarc/state/`) and
@@ -188,7 +189,10 @@ package.** The trust-critical surfaces, and example concerns for each, are:
   authority taken from a candidate's self-declaration rather than derived from the
   source registry.
 - **Release / attestation** (`.github/workflows/release-knowledge.yml`) — e.g. a
-  bundle published without provenance, or a rollback/freeze that a client accepts.
+  bundle published without provenance, an attestation minted from an unreviewed ref
+  (the workflow's ancestry gate refuses to sign a tag not contained in `main`, and
+  the anchor binds the certificate's git ref, not just the workflow path), or a
+  rollback/freeze that a client accepts.
 - **Helper scripts and installer** — e.g. a helper mishandling untrusted
   repository content, a secret value reaching `.attestarc/findings.json`, or the
   installer writing outside the intended skills directory.

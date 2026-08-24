@@ -10,13 +10,20 @@
 #
 # This workflow is itself a ROOT-OF-TRUST artifact: any change is two-party review
 # (core/promotion-policy.md, THREAT_MODEL.md §6). Third-party actions are pinned to
-# a full commit SHA. The manifest is self-verified with `gh attestation verify`
-# before publishing — it never publishes something it could not verify (fail-secure,
-# never sign/publish-then-trust).
+# a full commit SHA. Both the manifest AND the published .tar.gz are self-verified
+# with `gh attestation verify` before publishing — it never publishes something it
+# could not verify (fail-secure, never sign/publish-then-trust).
 #
-# NOTE: actions/attest-build-provenance below MUST be pinned to a full commit SHA
-# (matching the maintainer's chosen release) before this workflow is enabled; the
-# two-party review that gates changes to this file is where that pin is set.
+# Provenance is bound to REVIEWED source history two ways: (1) an ancestry gate
+# refuses to build unless the triggering commit is contained in origin/main (a tag
+# on an unreviewed commit cannot be signed), and (2) the self-verify + client-side
+# checks bind the certificate SAN's git ref, not just the workflow path, to the
+# reviewed refs pinned in knowledge/trust-anchor.json.
+#
+# NOTE: actions/attest-build-provenance is pinned below to v4.2.2
+# (4d101475d8b20a2381f78447822ac1eab6504dd8). The maintainer MUST independently
+# verify this SHA against the upstream release in the two-party review that gates
+# changes to this file before enabling the workflow.
 
 name: release-knowledge
 
@@ -48,11 +55,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the ancestry gate can prove the tagged commit is
+          # contained in origin/main.
+          fetch-depth: 0
+
+      - name: Bind to reviewed history (ancestry gate)
+        run: |
+          # Refuse to build/sign a tag that points at an unreviewed commit: the
+          # tagged commit MUST be contained in main's history (i.e. merged via
+          # review). A knowledge-v* tag on a feature branch or arbitrary commit
+          # fails here, before any attestation is minted.
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::commit $GITHUB_SHA is not contained in origin/main; refusing to sign an unreviewed release"
+            exit 1
+          fi
+          echo "ancestry gate passed: $GITHUB_SHA is in origin/main"
 
       - name: Build manifest over the packs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import hashlib, json, os, glob, datetime
+          import hashlib, json, os, glob, datetime, re, subprocess, tarfile, tempfile
           root = "knowledge"
           ref = os.environ.get("GITHUB_REF_NAME", "")
           version = int(ref.split("knowledge-v")[-1]) if "knowledge-v" in ref else 1
@@ -68,6 +94,52 @@ jobs:
                   h.update(fh.read())
               return h.hexdigest()
 
+          # prev_digest chains this manifest to the immediately-preceding release's
+          # manifest bytes (the sha256 the client records as `current`). It is a
+          # forward integrity chain; the primary anti-rollback remains the client's
+          # monotonic highest-version memory. null when no prior release exists.
+          def previous_manifest_digest(cur_version):
+              try:
+                  out = subprocess.run(
+                      ["gh", "release", "list", "--limit", "200",
+                       "--json", "tagName", "-q", ".[].tagName"],
+                      capture_output=True, text=True, check=True).stdout
+              except (OSError, subprocess.SubprocessError) as exc:
+                  print(f"prev_digest: release list failed ({exc}); using null")
+                  return None
+              prior = []
+              for line in out.splitlines():
+                  m = re.match(r"^knowledge-v(\d+)$", line.strip())
+                  if m and int(m.group(1)) < cur_version:
+                      prior.append((int(m.group(1)), line.strip()))
+              if not prior:
+                  print("prev_digest: no prior release; using null")
+                  return None
+              _, ptag = max(prior)
+              with tempfile.TemporaryDirectory() as td:
+                  try:
+                      subprocess.run(["gh", "release", "download", ptag,
+                                      "-p", "*.tar.gz", "-D", td], check=True)
+                  except (OSError, subprocess.SubprocessError) as exc:
+                      print(f"prev_digest: download {ptag} failed ({exc}); using null")
+                      return None
+                  tars = glob.glob(os.path.join(td, "*.tar.gz"))
+                  if not tars:
+                      return None
+                  with tarfile.open(tars[0]) as tf:
+                      member = next(
+                          (m for m in tf.getmembers()
+                           if m.name.endswith("knowledge/manifest.json")
+                           or os.path.basename(m.name) == "manifest.json"), None)
+                      if member is None:
+                          return None
+                      data = tf.extractfile(member).read()
+              digest = hashlib.sha256(data).hexdigest()
+              print(f"prev_digest: chained to {ptag} manifest sha256={digest}")
+              return digest
+
+          prev_digest = previous_manifest_digest(version)
+
           packs = []
           for p in sorted(glob.glob(os.path.join(root, "bootstrap", "*.jsonl"))):
               name = os.path.relpath(p, root)
@@ -76,35 +148,44 @@ jobs:
           manifest = {
               "_type": "attestarc-knowledge-manifest", "spec_version": "1.0",
               "version": version, "created_at": created, "expires": expires,
-              # prev_digest chains to the previous release's manifest when a prior
-              # LKG exists client-side; the primary anti-rollback is the client's
-              # monotonic highest-version memory. null on the first release.
-              "prev_digest": None, "mode": "signed", "packs": packs,
+              "prev_digest": prev_digest, "mode": "signed", "packs": packs,
           }
           with open(os.path.join(root, "manifest.json"), "w") as fh:
               json.dump(manifest, fh, indent=2)
-          print(f"built manifest version={version} expires={expires} packs={len(packs)}")
+          print(f"built manifest version={version} expires={expires} "
+                f"packs={len(packs)} prev_digest={prev_digest}")
           PY
-
-      - name: Attest the manifest (Sigstore build provenance)
-        uses: actions/attest-build-provenance@v2 # MUST pin to a full commit SHA before enabling
-        with:
-          subject-path: knowledge/manifest.json
 
       - name: Package the bundle
         run: |
           tar -czf "knowledge-${{ github.ref_name }}.tar.gz" \
             knowledge/manifest.json knowledge/bootstrap
 
+      - name: Attest the manifest and the archive (Sigstore build provenance)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          # Attest BOTH the manifest and the .tar.gz so the archive is verifiable
+          # before extraction — the client verifies the archive's provenance prior
+          # to safe-extract, then re-verifies the manifest + pack integrity.
+          subject-path: |
+            knowledge/manifest.json
+            knowledge-${{ github.ref_name }}.tar.gz
+
       - name: Self-verify provenance before publishing
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Fail-secure: refuse to publish a manifest whose own attestation does
-          # not verify under this repo's identity.
-          gh attestation verify knowledge/manifest.json \
-            --repo "${{ github.repository }}" \
-            --signer-workflow "${{ github.repository }}/.github/workflows/release-knowledge.yml"
+          # Fail-secure: refuse to publish anything whose own attestation does not
+          # verify under this repo's identity AND the exact triggering ref. Binding
+          # the ref (not just --signer-workflow's path match) mirrors the client's
+          # cert_identity_regexp check in knowledge/trust-anchor.json.
+          IDENTITY="${{ github.server_url }}/${{ github.repository }}/.github/workflows/release-knowledge.yml@${{ github.ref }}"
+          for artifact in knowledge/manifest.json "knowledge-${{ github.ref_name }}.tar.gz"; do
+            gh attestation verify "$artifact" \
+              --repo "${{ github.repository }}" \
+              --cert-identity "$IDENTITY" \
+              --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+          done
 
       - name: Publish knowledge release
         env:
@@ -125,6 +206,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Bind to reviewed history (ancestry gate)
+        run: |
+          # A revocation is dispatched from a branch; require that branch commit to
+          # be contained in origin/main so the kill switch cannot be minted from an
+          # unreviewed ref.
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::commit $GITHUB_SHA is not contained in origin/main; refusing to sign a revocation from an unreviewed ref"
+            exit 1
+          fi
 
       - name: Build revocation record
         env:
@@ -140,7 +234,10 @@ jobs:
           import json, os, datetime
           rec = {
               "_type": "attestarc-knowledge-revocation",
-              "revoked_version": int(os.environ["REVOKE_VERSION"]),
+              # revoked_versions is a non-empty list of positive ints — the shape
+              # knowledge_verify._validate_revocation / verify_and_apply_revocation
+              # require. A single dispatch revokes one version: [N].
+              "revoked_versions": [int(os.environ["REVOKE_VERSION"])],
               "revoked_at": datetime.datetime.now(datetime.timezone.utc)
                               .strftime("%Y-%m-%dT%H:%M:%SZ"),
               "action": "disable-version; fall back to last-known-good; mark "
@@ -151,7 +248,7 @@ jobs:
           PY
 
       - name: Attest the revocation (Sigstore build provenance)
-        uses: actions/attest-build-provenance@v2 # MUST pin to a full commit SHA before enabling
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: revocation.json
 
@@ -160,9 +257,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REVOKE_VERSION: ${{ github.event.inputs.revoke_version }}
         run: |
+          IDENTITY="${{ github.server_url }}/${{ github.repository }}/.github/workflows/release-knowledge.yml@${{ github.ref }}"
           gh attestation verify revocation.json \
             --repo "${{ github.repository }}" \
-            --signer-workflow "${{ github.repository }}/.github/workflows/release-knowledge.yml"
+            --cert-identity "$IDENTITY" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
           gh release create "knowledge-revocation-${REVOKE_VERSION}" \
             revocation.json \
             --title "Knowledge revocation v${REVOKE_VERSION}" \

@@ -173,7 +173,9 @@ ingestion" below). The shipped refresh is a narrow **download → verify → ins
 1. **Download** an official knowledge release bundle (packs + `manifest.json`) and
    its Sigstore attestation with the host fetch tool.
 2. **Verify** it against the external `trust-anchor.json` — shells out to
-   `gh attestation verify` for the pinned repo/workflow/issuer identity, then checks
+   `gh attestation verify` for the pinned repo / workflow / git-ref / issuer identity
+   (the anchor's `cert_identity_regexp` binds the certificate's `@<ref>`, not just the
+   workflow path, so an attestation from an unreviewed ref is rejected), then checks
    manifest pack integrity, freshness, monotonic version vs persistent client state
    (`~/.attestarc/state/trusted-state.json`), `prev_digest` chaining, and
    revocation. **Any failure discards the download**; the installed last-known-good
@@ -184,9 +186,10 @@ ingestion" below). The shipped refresh is a narrow **download → verify → ins
    python "$ATTESTARC/scripts/knowledge_verify.py" verify-download "$DOWNLOAD_DIR"
    ```
 
-3. **Install** — `install` is the ONLY path that advances client state. It
-   safe-extracts an archive bundle (refusing absolute paths, `..`, and
-   symlink/hardlink members), re-runs verification, re-verifies the staged bytes,
+3. **Install** — `install` is the ONLY path that advances client state. It verifies
+   an archive bundle's own attestation before extraction (the published `.tar.gz` is
+   attested alongside the manifest), safe-extracts it (refusing absolute paths, `..`,
+   and symlink/hardlink members), re-runs verification, re-verifies the staged bytes,
    atomically renames the snapshot into `~/.attestarc/knowledge/snapshots/vN`, then
    atomically records the new version+digest in client state — so the assessor's
    `verify` trusts it thereafter. Client state and snapshot material live in separate

@@ -273,15 +273,22 @@ def _gh_attest_verify(artifact_path, anchor, offline_bundle=None):
         return False, "anchor missing repo"
     cmd = ["gh", "attestation", "verify", artifact_path, "--repo", repo]
     # gh treats [signer-workflow, cert-identity, cert-identity-regex, signer-repo]
-    # as a mutually-exclusive group. Prefer the higher-level signer-workflow
-    # constraint; fall back to the SAN identity regexp only if no workflow is
-    # pinned. --cert-oidc-issuer is orthogonal and always applied.
+    # as a mutually-exclusive group. PREFER the SAN identity regexp: unlike
+    # --signer-workflow (which matches only the workflow PATH and ignores the git
+    # ref), the regexp binds the certificate SAN's trailing "@<ref>", so an
+    # attestation minted from an untrusted ref — a feature branch, an unreviewed
+    # workflow_dispatch — is rejected even though the workflow file is the same.
+    # The anchor's cert_identity_regexp is pinned to the reviewed refs (the
+    # release tag ref refs/tags/knowledge-v<N> and the dispatch ref
+    # refs/heads/main); see knowledge/trust-anchor.json. --signer-workflow is only
+    # a fallback for an anchor that pins no regexp. --cert-oidc-issuer is
+    # orthogonal and always applied.
     signer_workflow = (anchor or {}).get("signer_workflow")
     ident_re = (anchor or {}).get("cert_identity_regexp")
-    if signer_workflow:
-        cmd += ["--signer-workflow", f"{repo}/{signer_workflow.lstrip('/')}"]
-    elif ident_re:
+    if ident_re:
         cmd += ["--cert-identity-regex", ident_re]
+    elif signer_workflow:
+        cmd += ["--signer-workflow", f"{repo}/{signer_workflow.lstrip('/')}"]
     issuer = (anchor or {}).get("cert_oidc_issuer")
     if issuer:
         cmd += ["--cert-oidc-issuer", issuer]
@@ -525,6 +532,16 @@ def install(bundle, anchor=None, client_state=None, now=None,
         if os.path.isdir(bundle):
             bundle_dir = bundle
         else:
+            # Verify the archive's OWN attestation BEFORE extraction, so unattested
+            # bytes never reach the (already safe) tar reader. The published .tar.gz
+            # is attested at release time alongside the manifest. Skipped only for an
+            # offline install (no network to fetch the archive's attestation); the
+            # extracted manifest attestation + pack integrity still gate the install.
+            if offline_bundle is None:
+                arch_ok, arch_detail = _gh_attest_verify(bundle, anchor)
+                report.check("archive:attested", arch_ok, arch_detail)
+                if not arch_ok:
+                    return refuse(f"archive attestation failed: {arch_detail}")
             try:
                 extract_root = os.path.join(staging, "extract")
                 safe_extract_tar(bundle, extract_root)

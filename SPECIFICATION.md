@@ -985,17 +985,23 @@ was in force — not today's semantics applied backward.
 
 The root of trust is an **external anchor** (`knowledge/trust-anchor.json`) that
 ships inside the SSH-signed skill release and lives OUTSIDE any downloaded bundle;
-it pins the Sigstore build-provenance identity (repo + signer workflow + OIDC
-issuer) an official bundle must have been produced under. A bundle can therefore
-never declare its own trust, and the in-package snapshot is bootstrap-trusted ONLY
-because it rode in on the attested skill release. Upstream CI attests
-`knowledge/manifest.json` (version, expiry, `prev_digest`, per-pack `{sha256,size}`)
-with GitHub Artifact Attestations. `scripts/knowledge_verify.py` provides the
-verification and lifecycle entry points: `verify_download` (Updater; runs
-`gh attestation verify` against the anchor identity, then checks manifest pack
-integrity, freshness/anti-freeze, monotonic version vs persistent client state,
-`prev_digest` chaining, and revocation — **any failure discards the download and
-retains the installed last-known-good**) and `verify_installed` (Assessor; no
+it pins the Sigstore build-provenance identity (repo + signer workflow + the
+reviewed git **ref** + OIDC issuer) an official bundle must have been produced under.
+The identity is enforced by `cert_identity_regexp`, which binds the certificate SAN's
+trailing `@<ref>` — not only the workflow path — to the reviewed refs (the release
+tag `refs/tags/knowledge-v<N>` and the dispatch ref `refs/heads/main`), so an
+attestation minted from an unreviewed branch does not satisfy the anchor. A bundle
+can therefore never declare its own trust, and the in-package snapshot is
+bootstrap-trusted ONLY because it rode in on the attested skill release. Upstream CI
+attests **both** `knowledge/manifest.json` (version, expiry, `prev_digest`, per-pack
+`{sha256,size}`) **and** the published `.tar.gz` with GitHub Artifact Attestations;
+it populates `prev_digest` from the immediately-preceding release's manifest and
+only signs a commit contained in `main`'s reviewed history (an ancestry gate).
+`scripts/knowledge_verify.py` provides the verification and lifecycle entry points:
+`verify_download` (Updater; runs `gh attestation verify` against the anchor identity,
+then checks manifest pack integrity, freshness/anti-freeze, monotonic version vs
+persistent client state, `prev_digest` chaining, and revocation — **any failure
+discards the download and retains the installed last-known-good**) and `verify_installed` (Assessor; no
 network or `gh`, trusts the in-package snapshot as bootstrap or a refreshed snapshot
 only if client state records its exact version+digest was attested). A downloaded
 bundle declaring `mode: bootstrap` is rejected. Attestation verification shells out
@@ -1005,10 +1011,11 @@ another repo/workflow does not satisfy the anchor.
 
 `verify_download` is a pure fact operation and mutates nothing; advancing the
 high-water mark and installing a snapshot SHALL be done only by `install` (the
-single state-advancing path). `install` SHALL: safe-extract an archive bundle
-(`_pathsafe.safe_extract_tar` — refusing absolute paths, `..` traversal, and every
-non-regular member before writing anything, extracting member-by-member with its own
-IO rather than `tarfile.extractall`); run `verify_download`; on success copy only the
+single state-advancing path). `install` SHALL: verify an archive bundle's own
+attestation BEFORE extraction (skipped only for an offline install); safe-extract the
+archive (`_pathsafe.safe_extract_tar` — refusing absolute paths, `..` traversal, and
+every non-regular member before writing anything, extracting member-by-member with
+its own IO rather than `tarfile.extractall`); run `verify_download`; on success copy only the
 manifest and declared packs into a staging snapshot, re-verify the staged bytes
 against the attested manifest, atomically rename it into
 `~/.attestarc/knowledge/snapshots/vN`, and atomically advance client state
@@ -1025,7 +1032,8 @@ A compromised version SHALL be revocable via a kill switch (`THREAT_MODEL.md` §
 `verify_and_apply_revocation` SHALL be the ONLY public revocation path: it
 attestation-verifies the revocation record against the anchor (an unattested,
 unreadable, or malformed record is discarded and client state left untouched),
-records the revoked version(s), and rolls `current` back to the most recent retained
+structurally validates its `revoked_versions` (a non-empty list of positive
+integers — the shape the release workflow emits), records the revoked version(s), and rolls `current` back to the most recent retained
 non-revoked snapshot still on disk (or to the in-package bootstrap when none
 remains), marking findings assessed under it `requires_reverification`. The internal
 `_apply_revocation` (which trusts its caller) SHALL have no public entry point.
