@@ -281,8 +281,8 @@ semantic diff → direction → may-promote).
 - **Auto-promote** — validated candidate + authoritative source (derived authority
   ≥ 90) bound to a **resolvable, self-verifying** quarantine receipt + no conflict +
   does not modify or supersede an active claim + a non-negative/non-uncertain
-  **derived** direction + a passing **eval-result artifact** + (for published packs)
-  no failed attestation.
+  **derived** direction + a **digest-bound** passing **eval-result artifact** + (for
+  published packs) no failed attestation.
 - **Require review (PR)** — supersedes, conflicts with, or otherwise **modifies an
   existing active claim** (an additive edit of an active entry routes to review even
   without `supersedes`), or the derived direction is security-**negative** or
@@ -296,6 +296,8 @@ semantic diff → direction → may-promote).
   `knowledge/sources.yaml`,
   `knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json` (including the
   candidate schema), `schemas/learning-candidate.schema.json`,
+  `schemas/eval-result.schema.json`, anything under `knowledge/promotions/` (the
+  per-entry promotion decisions and the bootstrap approval),
   `.github/workflows/release-knowledge.yml`, or **any weakening/deletion of a
   trusted eval**.
 - **Never auto-promote** — blog / issue / researcher post / model inference →
@@ -320,15 +322,41 @@ promotes the policy into a mechanical gate without any code change.
 Authority is assigned by the source registry (`knowledge/sources.yaml`), never by
 the model, and URL paths are dot-segment-normalized before prefix matching (a
 `/actions/../evil` cannot smuggle a trusted org prefix). Conflict and semantic diff
-are computed against an **immutable baseline** (the last verified released snapshot),
-never the working tree that carries the proposal. The security direction is
-**derived** from the candidate's `effect` and its baseline diff, never read from a
-model-controlled field. Content-promotion eligibility is separate from distribution
-trust: a *missing* attestation (`None`) means "not attested yet" and never reads as
-valid, but does not by itself block content promotion; only a genuine **failed**
-attestation over a published pack blocks. The eval corpus is itself root-of-trust: a
-candidate MAY *add* paired find/refuse evals but MUST NOT weaken or delete trusted
-evals in the same trust step.
+are computed against a **mandatory, pinned immutable baseline** — the last verified
+released snapshot, resolved from the installed verified snapshot
+(`resolve_verified_baseline`, fail-closed if none is trusted) or an explicit
+`--baseline`; the working tree that carries the proposal is **never** an implicit
+baseline (judging a candidate against the tree that already contains it would erase
+the conflict/modify signal). The set of changed paths and removed/modified evals is
+**derived from git** (`git diff --name-status <baseline-commit> HEAD`), not from
+caller-supplied flags, so a caller cannot omit the path carrying a poisoning edit.
+The security direction is **derived** from the candidate's `effect` and its baseline
+diff, never read from a model-controlled field. Content-promotion eligibility is
+separate from distribution trust: a *missing* attestation (`None`) means "not attested
+yet" and never reads as valid, but does not by itself block content promotion; only a
+genuine **failed** attestation over a published pack blocks. The eval corpus is itself
+root-of-trust: a candidate MAY *add* paired find/refuse evals but MUST NOT weaken or
+delete trusted evals in the same trust step.
+
+**The eval-result is digest-bound; promotion is recomputed at release.** The
+eval-result artifact (`schemas/eval-result.schema.json`) is trusted only when it binds
+to the exact inputs it was produced over — `candidate_sha256`, `baseline_manifest_sha256`,
+and `eval_corpus_sha256`, all recomputed by `_load_eval_result_verified` and rejected on
+any mismatch — so a bare `{"passed": true}` or a result recycled from a different
+candidate/baseline/corpus can never satisfy auto-promote. This is not an eval-runner:
+the behavioral evals stay manually judged; the artifact only binds a judgement to a
+change. And the tier a maintainer saw in a PR is not, by itself, what ships:
+`knowledge_compile.py verify-promotions` runs in the release workflow **before the
+manifest is built** and fails the release unless **every active entry** in the packs is
+accounted for by a digest-pinned `knowledge/promotions/bootstrap.approval.json` entry
+(the hand-authored entries that predate the pipeline), an `<entry-id>.decision.json`
+whose digest + baseline match and which **still recomputes** to `auto-promote` from the
+pinned baseline + git-derived diff + rebound eval-result, or a review-tier decision with
+a recorded approver. An entry edited after its decision, whose decision no longer
+recomputes, or that nothing accounts for, fails the release. This makes
+`promote_to_verified` the **only** path to a shipped active entry, not merely *a* path a
+hand-edited pack could sidestep; it recomputes only what is reproducible from shipped
+material (it never re-runs quarantine/fetch — provenance is recorded in the decision).
 
 ## 7. Findings, provenance, and invalidation
 
@@ -403,16 +431,30 @@ and the security page.
   self-declaration. A candidate whose declared authority/publisher/type disagrees
   with the derived values is rejected.
 - **Immutable baseline** — the last verified released snapshot, against which
-  conflict and semantic diff are computed. Never the working tree that carries the
-  proposal, so a proposal cannot launder itself by editing what it is compared to.
+  conflict and semantic diff are computed. Mandatory and pinned (resolved from the
+  installed verified snapshot or an explicit `--baseline`); never the working tree
+  that carries the proposal, so a proposal cannot launder itself by editing what it
+  is compared to.
 - **Derived direction** — a conservative security-regression signal computed from
   the candidate's `effect` and its baseline semantic diff, never read from a
   model-controlled field. A new `mitigation`, or a modification moving an active
   `risk-increasing` claim toward `mitigation`/`neutral`, is **negative**; any other
   modification of an active semantic is **uncertain**; both route to review.
-- **Eval-result artifact** — the small JSON the eval step emits (`{"passed": …,
-  "corpus_sha": …, "cases": N}`) that the promotion policy consumes. Absent or
-  `passed: false` fails closed (blocks auto-promote).
+- **Eval-result artifact** — the small JSON the eval step emits
+  (`schemas/eval-result.schema.json`) that the promotion policy consumes, trusted only
+  when **digest-bound** to the candidate (`candidate_sha256`), the baseline
+  (`baseline_manifest_sha256`), and the eval corpus (`eval_corpus_sha256`) — all
+  recomputed and rejected on mismatch. Absent, unbound, or `passed: false` fails closed
+  (blocks auto-promote); `passed` requires an empty `failures` list.
+- **`verify-promotions` gate** — the release-time recompute (`knowledge_compile.py
+  verify-promotions`) that fails the build unless every active shipped entry is
+  accounted for by the digest-pinned bootstrap approval, a still-recomputing
+  auto-promote decision, or a review-tier decision with a recorded approver. Makes
+  `promote_to_verified` the only path to a shipped active entry.
+- **Bootstrap approval** (`knowledge/promotions/bootstrap.approval.json`) — the
+  digest-pinned, two-party approval recorded once for the hand-authored entries that
+  rode in on the signed skill release and predate the promotion pipeline (so carry no
+  quarantine receipts); one canonical digest per entry id.
 - **`requires_reverification`** — a read-time view surfaced on a finding whose
   knowledge dependency was superseded or revoked. The stored status is never
   silently mutated and a knowledge change never auto-resolves a finding; the

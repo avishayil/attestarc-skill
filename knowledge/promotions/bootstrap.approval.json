@@ -1,0 +1,27 @@
+{
+  "_type": "attestarc-bootstrap-approval",
+  "approved_at": "2026-08-24T00:00:00Z",
+  "approved_by": "avishayil",
+  "comment": "Hand-authored bootstrap knowledge. It is trusted because it ships inside the SSH-signed skill release, not because it went through the candidate->verified pipeline (there is no quarantine receipt for a maintainer-authored entry). This file records the two-party-review approval once, pinning each active entry's canonical digest (knowledge_compile.canonical_entry_digest). verify-promotions accepts an active entry only when its shipped digest matches the pin here; editing an entry changes its digest and requires re-approval or promotion through the pipeline. Root-of-trust: changes are two-party review (core/promotion-policy.md).",
+  "entries": {
+    "KE-gha-cache-write-triggers": "ba68d12d0a170f33a2c8131755210854ca8699ac4ccbe332c15900a5b5b890c6",
+    "KE-gha-checkout-forkpr-refusal": "1a94814a183647ab90ce915f706e76e95182a92e2731c7b6e19f6f1324a33cf3",
+    "KE-gha-checkout-persist-credentials": "73b255ffa9f27c48c6eb90ad3c8f2db3013beeb0de65dc6abc623cd7ad421943",
+    "KE-gha-fork-pr-exposure-settings": "95d23ec3a5f1b5e25958b2e2fa2b3616040fa3b815f32b199b7ff004c3cb49ca",
+    "KE-gha-fork-pr-workflow-approval": "8127b661183245a771495c20f132073631ce89d4b2d33fb3b70c3f07c7d568b8",
+    "KE-gha-forkpr-token-default": "b8d7d4f03049180b4b73d01df34270572fbe445f26ada624b752a3ac58defe80",
+    "KE-gha-potentially-malicious-workflow-hold": "85fb7f811dd34213985a43951ff273278bdca0bb9a55afea581bb357ec0edb62",
+    "KE-gha-privileged-trigger-context": "bcf5503d147861177bb2c9782a73860b247382678608345c2af36ed5b3f3c8ae",
+    "KE-gha-sha-pin-policy-carveout": "aa27e581254c4e81834de9af2015c43b7060f70241654bc2f3f4e0488197c0a5",
+    "KE-gha-workflow-execution-protection-actors": "22653a3bf4cfecf67201946b26b9e0a112d87b2178ff856d538357fba19011e2",
+    "KE-gha-workflow-execution-protection-events": "6ae1d4a08f9101f5f5ecaa30d306f3ae99c4a81799b69b6caeaaa1305556801f",
+    "KE-ghapi-fork-pr-permission-semantics": "8514d114d9aed1f7fc415c28c8f53a1ba641758783cbee51a078527e85a94316",
+    "KE-ghapi-readonly-observation-endpoints": "4f57560b22110418b6abee4ebb3295a140a64de888a1553c0e4aa3c9722df93c",
+    "KE-oidc-aud-validation": "b9485b74b8f217c7f70a9669171b224c6ff63a712c08e528881251c4a793f960",
+    "KE-oidc-immutable-claims": "8046989e415dbbc5997a7ad8b2f5eaf474f01a00eb0c1968ea5c25806212bf1a",
+    "KE-oidc-job-workflow-ref": "88f8249514d01514cddb2e90231cbf19d63069e2a42b6fc8e9f29ddbe072e675",
+    "KE-slsa-build-track": "0337837e4e0a247b253b42be6d03c1e20ade637773ad81741e98e78d16af6e5d",
+    "KE-slsa-source-track": "4f59542979b8d5198cbadcc9b7a2998035c2c8a0591751c86778abf5bcedee45"
+  },
+  "review": "PR-F: enforceable promotion (release-time verify-promotions gate)"
+}

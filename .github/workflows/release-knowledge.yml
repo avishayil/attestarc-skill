@@ -1,8 +1,12 @@
 # Knowledge-plane release + attestation (root-of-trust workflow).
 #
-# Builds knowledge/manifest.json over knowledge/bootstrap/*.jsonl (monotonic
-# version + short TTL, pinning every pack by sha256+size), then attests the
-# manifest with GitHub Artifact Attestations (Sigstore build provenance, OIDC).
+# Verifies (verify-promotions gate) that every ACTIVE entry in the packs was
+# promoted through the deterministic policy — the digest-pinned bootstrap approval,
+# a still-recomputing auto-promote decision, or a recorded review approval — so a
+# hand-edited pack can never ship, THEN builds knowledge/manifest.json over
+# knowledge/bootstrap/*.jsonl (monotonic version + short TTL, pinning every pack by
+# sha256+size), then attests the manifest with GitHub Artifact Attestations
+# (Sigstore build provenance, OIDC).
 # The attestation binds the bundle to THIS repo + workflow + issuer — the identity
 # scripts/knowledge_verify.py pins in knowledge/trust-anchor.json. There is no
 # maintainer signing key and no homemade role-file protocol: trust derives from
@@ -95,6 +99,51 @@ jobs:
             exit 1
           fi
           echo "exact-HEAD gate passed: $GITHUB_SHA is the current origin/main tip"
+
+      - name: Verify every active entry was promoted (verify-promotions gate)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # ENFORCEABLE PROMOTION GATE — runs BEFORE the manifest is built so a pack
+          # that never went through the promotion policy can never be shipped. Every
+          # ACTIVE entry in knowledge/bootstrap/*.jsonl must be accounted for by one
+          # of: the digest-pinned bootstrap approval (hand-authored knowledge that
+          # rode in on the signed skill release), a per-entry auto-promote decision
+          # that STILL recomputes to auto-promote from the pinned baseline + a
+          # git-derived diff + a bound eval-result, or a per-entry review decision
+          # with a recorded approver. This makes promote_to_verified the ONLY path to
+          # a shipped active entry — not merely *a* path. It never re-runs
+          # quarantine/fetch (provenance is a promotion-time property recorded in the
+          # decision); it recomputes only what is reproducible from shipped material.
+          #
+          # Baseline: bootstrap-approved entries are baseline-independent; per-entry
+          # decisions are recomputed against the PREVIOUS released snapshot, whose
+          # archive is downloaded and attestation-verified here (fail-closed) and
+          # whose tag commit supplies the git-derived diff. A first release ships
+          # bootstrap-approved entries only.
+          set -euo pipefail
+          PREV_TAG="$(gh release list --limit 200 --json tagName -q '.[].tagName' \
+            | grep -E '^knowledge-v[0-9]+$' | sort -t v -k2 -n | tail -1 || true)"
+          if [ -n "$PREV_TAG" ]; then
+            BASE="$(mktemp -d)"
+            gh release download "$PREV_TAG" -p '*.tar.gz' -D "$BASE"
+            TAR="$(ls "$BASE"/*.tar.gz)"
+            # Authenticate the baseline archive before trusting its bytes (bundle
+            # identity @refs/tags/knowledge-v<prev>) — same fail-closed rule as the
+            # prev_digest chain head.
+            gh attestation verify "$TAR" --repo "${{ github.repository }}" \
+              --cert-identity "${{ github.server_url }}/${{ github.repository }}/.github/workflows/release-knowledge.yml@refs/tags/${PREV_TAG}" \
+              --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+            tar -xzf "$TAR" -C "$BASE"
+            PREV_SHA="$(git rev-list -n1 "refs/tags/${PREV_TAG}")"
+            python3 scripts/knowledge_compile.py verify-promotions \
+              --knowledge-root knowledge \
+              --baseline "$BASE/knowledge" --baseline-commit "$PREV_SHA"
+          else
+            echo "verify-promotions: no prior release; first release ships bootstrap-approved entries only"
+            python3 scripts/knowledge_compile.py verify-promotions \
+              --knowledge-root knowledge --baseline knowledge --trust-caller-diff
+          fi
 
       - name: Build manifest over the packs
         env:

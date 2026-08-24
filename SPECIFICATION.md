@@ -1140,31 +1140,60 @@ unvalidated candidate.
 Every promotion fact is **derived**, not asserted by the caller: authority/type/
 publisher come from reclassifying the candidate's source URLs through the registry
 (URL paths dot-segment-normalized before prefix matching); conflict and a
-**semantic diff** (`added` vs `modified`) are computed against an **immutable
-baseline** (the last verified released snapshot, never the working tree); the
-security **direction** is derived from `effect` + that diff (never a model field);
-and root-of-trust/eval-weakening come from a path classifier over the proposed diff.
-Each promotion-eligible source SHALL be bound to a **resolvable, self-verifying**
-quarantine receipt (its stored `.raw` re-hashes to the receipt id and its `final_url`
-re-classifies to the same authority; an inline `content_hash` alone is insufficient;
-a cross-origin redirect off the final origin is rejected). Tiers: **auto-promote**
-(validated candidate + authoritative source bound to a self-verifying receipt + no
-conflict + does not modify or supersede an active claim + non-negative/non-uncertain
-derived direction + a passing **eval-result artifact** + no failed attestation over a
-published pack); **require review** (supersedes, conflicts with, or otherwise modifies
-an active claim — an additive edit routes here even without `supersedes` — or a
-security-*negative*/*uncertain* direction, or a missing/failing eval-result);
-**two-party review** (root-of-trust files: `core/agent-safety.md`,
-`core/promotion-policy.md`, `scripts/knowledge_verify.py`, `scripts/knowledge.py`,
-`scripts/knowledge_compile.py`, `scripts/_pathsafe.py`, `knowledge/sources.yaml`,
-`knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json` (including the
-candidate schema), `schemas/learning-candidate.schema.json`, the release workflow, or
-any eval weakening/deletion); **never auto-promote** (blog/issue/researcher/model
-inference → candidate only). Authority is assigned by `knowledge/sources.yaml`, never
-by the model. Content-promotion eligibility is separate from distribution trust: a
-*missing* attestation (`None`) never reads as valid but does not by itself block
-content promotion (the attestation is applied at release, verified at runtime); only a
-genuine failed attestation blocks.
+**semantic diff** (`added` vs `modified`) are computed against a **mandatory, pinned
+immutable baseline** — the last verified released snapshot, resolved from the installed
+verified snapshot (`resolve_verified_baseline`, fail-closed if none is trusted) or an
+explicit `--baseline`; the working tree that carries the proposal SHALL NOT be an
+implicit baseline. The set of changed paths and removed/modified evals SHALL be
+**derived from git** (`git diff --name-status <baseline-commit> HEAD`), not from
+caller-supplied flags (which are honored only behind an explicitly-untrusted
+`--trust-caller-diff`, for tests). The security **direction** is derived from `effect`
++ that diff (never a model field); and root-of-trust/eval-weakening come from a path
+classifier over the git-derived diff. Each promotion-eligible source SHALL be bound to
+a **resolvable, self-verifying** quarantine receipt (its stored `.raw` re-hashes to the
+receipt id and its `final_url` re-classifies to the same authority; an inline
+`content_hash` alone is insufficient; a cross-origin redirect off the final origin is
+rejected). The **eval-result artifact** (`schemas/eval-result.schema.json`) SHALL be
+trusted only when **digest-bound** to `candidate_sha256`, `baseline_manifest_sha256`,
+and `eval_corpus_sha256` (all recomputed by `_load_eval_result_verified` and rejected on
+mismatch), with `passed: true` requiring an empty `failures` list; a bare
+`{"passed": true}` or a result recycled from a different candidate/baseline/corpus SHALL
+NOT satisfy auto-promote. Tiers: **auto-promote** (validated candidate + authoritative
+source bound to a self-verifying receipt + no conflict + does not modify or supersede an
+active claim + non-negative/non-uncertain derived direction + a **bound** passing
+eval-result artifact + no failed attestation over a published pack); **require review**
+(supersedes, conflicts with, or otherwise modifies an active claim — an additive edit
+routes here even without `supersedes` — or a security-*negative*/*uncertain* direction,
+or a missing/unbound/failing eval-result); **two-party review** (root-of-trust files:
+`core/agent-safety.md`, `core/promotion-policy.md`, `scripts/knowledge_verify.py`,
+`scripts/knowledge.py`, `scripts/knowledge_compile.py`, `scripts/_pathsafe.py`,
+`knowledge/sources.yaml`, `knowledge/trust-anchor.json`,
+`schemas/knowledge*.schema.json` (including the candidate schema),
+`schemas/learning-candidate.schema.json`, `schemas/eval-result.schema.json`, anything
+under `knowledge/promotions/`, the release workflow, or any eval weakening/deletion);
+**never auto-promote** (blog/issue/researcher/model inference → candidate only).
+Authority is assigned by `knowledge/sources.yaml`, never by the model.
+Content-promotion eligibility is separate from distribution trust: a *missing*
+attestation (`None`) never reads as valid but does not by itself block content promotion
+(the attestation is applied at release, verified at runtime); only a genuine failed
+attestation blocks.
+
+Promotion SHALL be **enforced at release**, not merely decided at proposal. Each
+promotion is recorded as a committed, reviewed artifact under `knowledge/promotions/`:
+`<entry-id>.decision.json` (binding the promoted entry's canonical digest
+`entry_sha256`, `baseline_manifest_sha256`, tier, bound eval-result, and — for a review
+tier — `review.approved_by`) or the digest-pinned `bootstrap.approval.json` (the
+hand-authored entries that predate the pipeline). `knowledge_compile.py
+verify-promotions` SHALL run in the release workflow **before the manifest is built**
+and SHALL fail the release unless every **active** entry in the packs is accounted for
+by a matching bootstrap-approval digest, an `auto-promote` decision whose digest +
+baseline match and which still recomputes to `auto-promote` from the pinned baseline +
+git-derived diff + rebound eval-result, or a review-tier decision with a recorded
+`review.approved_by`. An entry edited after its decision (digest mismatch), whose
+auto-promote decision no longer recomputes, or that nothing accounts for, SHALL fail the
+release. This makes `promote_to_verified` the only path to a shipped active entry; the
+gate does not re-run quarantine/fetch (provenance is a promotion-time property recorded
+in the decision) — it recomputes only what is reproducible from shipped material.
 
 ### 24.3 Eval-gated evolution
 

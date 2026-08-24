@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://attestarc.dev/schemas/eval-result.json",
+  "title": "AttestArc eval-result artifact (digest-bound)",
+  "description": "The small JSON the eval step emits and the promotion policy consumes. It is trusted ONLY when it is BOUND to the exact inputs it was produced over: the candidate entry being promoted (candidate_sha256), the immutable baseline it was judged against (baseline_manifest_sha256), and the trusted eval corpus (eval_corpus_sha256). knowledge_compile._load_eval_result_verified recomputes all three digests and refuses the result on any mismatch, so a bare {\"passed\": true} — or a passing result recycled from a different candidate/baseline/corpus — can never satisfy the auto-promote gate. passed:true additionally requires an empty failures list. This is NOT an eval-runner: the behavioral evals stay manually judged; what this artifact binds is that a given judgement belongs to a given change.",
+  "type": "object",
+  "required": [
+    "_type", "candidate_sha256", "baseline_manifest_sha256",
+    "eval_corpus_sha256", "cases", "passed", "failures", "runner", "evaluated_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "_type": {"const": "attestarc-eval-result"},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "canonical digest of the candidate entry this result was produced over (knowledge_compile.canonical_entry_digest)"},
+    "baseline_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "sha256 of the immutable baseline manifest.json the candidate was judged against"},
+    "eval_corpus_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "digest of the trusted eval corpus (knowledge_compile.eval_corpus_digest over evals/cases/*.yaml)"},
+    "cases": {"type": "integer", "minimum": 0, "description": "number of eval cases considered"},
+    "passed": {"type": "boolean", "description": "true only when every considered case passed; requires an empty failures list"},
+    "failures": {"type": "array", "items": {"type": "string"}, "description": "case ids that failed (empty when passed)"},
+    "runner": {"type": "string", "description": "who/what produced the judgement (e.g. 'manual:avishayil', 'ci')"},
+    "evaluated_at": {"type": "string", "format": "date-time"}
+  }
+}

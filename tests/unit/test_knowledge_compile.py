@@ -46,7 +46,11 @@ def _bound(rec, url="https://docs.github.com/x", **over):
 
 
 def _facts(**over):
-    base = {"eval_result": {"passed": True}, "signature_valid": True,
+    # A BOUND passing eval-result: the tier-logic tests assume the eval-result has
+    # already been bound to (candidate, baseline, corpus) by bind_eval_result — the
+    # binding itself is exercised by the dedicated eval-result tests below. A bare
+    # {"passed": True} (no _bound) is deliberately NOT enough for auto-promote.
+    base = {"eval_result": {"passed": True, "_bound": True}, "signature_valid": True,
             "change_paths": [], "removed_or_modified_evals": []}
     base.update(over)
     return base
@@ -539,8 +543,10 @@ def test_promote_derives_corroborated_from_two_independent_origins(tmp_path,
 def test_evaluate_candidate_auto_promotes_clean_input(tmp_path, knowledge_dir):
     reg = kc.load_registry(knowledge_dir)
     out, rec = _quarantine(tmp_path, reg)
+    # evaluate_candidate consumes an ALREADY-BOUND eval-result (the CLI binds it via
+    # _load_eval_result_verified); binding is exercised in its own tests below.
     result = kc.evaluate_candidate(
-        _bound(rec), reg, out, [], {"passed": True},
+        _bound(rec), reg, out, [], {"passed": True, "_bound": True},
         change_facts={"change_paths": [], "removed_or_modified_evals": []})
     assert result["validation"]["valid"] is True
     assert result["promotion"]["tier"] == "auto-promote", result["promotion"]
@@ -577,7 +583,7 @@ def test_cli_promote_refuses_non_auto(tmp_path, knowledge_dir, capsys, monkeypat
     monkeypatch.setattr("sys.stdin", _Stdin(json.dumps(cand)))
     rc = kc.main(["promote", "--knowledge-root", knowledge_dir,
                   "--baseline", knowledge_dir, "--quarantine-dir", out,
-                  "--eval-result", str(ev)])
+                  "--trust-caller-diff", "--eval-result", str(ev)])
     assert rc == 1
     assert "refusing to promote" in capsys.readouterr().err
 
@@ -588,3 +594,245 @@ class _Stdin:
 
     def read(self):
         return self._text
+
+
+# --------------------------------------------------------------------------- #
+# PR-F: enforceable promotion — bound eval-result, git-derived diff, mandatory
+# verified baseline, release-time verify-promotions gate
+# --------------------------------------------------------------------------- #
+import types  # noqa: E402
+
+
+def _eval_result(candidate, baseline_digest, corpus_root, **over):
+    """A well-formed eval-result BOUND to (candidate, baseline, corpus)."""
+    res = {
+        "_type": "attestarc-eval-result",
+        "candidate_sha256": kc.canonical_entry_digest(candidate),
+        "baseline_manifest_sha256": baseline_digest,
+        "eval_corpus_sha256": kc.eval_corpus_digest(corpus_root),
+        "cases": 3, "passed": True, "failures": [],
+        "runner": "manual:test", "evaluated_at": "2026-08-24T00:00:00Z",
+    }
+    res.update(over)
+    return res
+
+
+def test_bare_passed_true_is_not_bound_and_blocks_auto_promote(repo_root):
+    """{'passed': true} carries no binding — bind_eval_result refuses it, and the
+    auto-promote gate fails closed (defect 4)."""
+    corpus = os.path.join(repo_root, "evals")
+    bound = kc.bind_eval_result({"passed": True}, _candidate(), "deadbeef", corpus)
+    assert bound["_bound"] is False
+    assert bound["_bind_errors"]
+
+
+def test_bound_eval_result_permits_auto_promote(repo_root, knowledge_dir):
+    reg = kc.load_registry(knowledge_dir)
+    corpus = os.path.join(repo_root, "evals")
+    cand = _candidate()
+    ev = kc.bind_eval_result(_eval_result(cand, "base-digest", corpus),
+                             cand, "base-digest", corpus)
+    assert ev["_bound"] is True and ev["passed"] is True
+    result = kc.may_promote(cand, _facts(eval_result=ev), registry=reg,
+                            baseline_entries=[], validation=_OK)
+    assert result["tier"] == "auto-promote", result["reasons"]
+
+
+def test_eval_result_unbound_to_candidate_rejected(repo_root):
+    corpus = os.path.join(repo_root, "evals")
+    cand = _candidate()
+    other = _candidate(claim="a different claim entirely")
+    # A result produced over `other` cannot be reused for `cand`.
+    res = _eval_result(other, "base", corpus)
+    bound = kc.bind_eval_result(res, cand, "base", corpus)
+    assert bound["_bound"] is False
+    assert any("candidate_sha256" in e for e in bound["_bind_errors"])
+
+
+def test_eval_result_unbound_to_baseline_rejected(repo_root):
+    corpus = os.path.join(repo_root, "evals")
+    cand = _candidate()
+    res = _eval_result(cand, "the-baseline-it-was-judged-against", corpus)
+    bound = kc.bind_eval_result(res, cand, "a-DIFFERENT-baseline", corpus)
+    assert bound["_bound"] is False
+    assert any("baseline_manifest_sha256" in e for e in bound["_bind_errors"])
+
+
+def test_eval_result_unbound_to_corpus_rejected(repo_root, tmp_path):
+    corpus = os.path.join(repo_root, "evals")
+    cand = _candidate()
+    res = _eval_result(cand, "base", corpus)
+    # A different (empty) corpus root digests differently.
+    empty = str(tmp_path / "empty-corpus")
+    os.makedirs(os.path.join(empty, "cases"))
+    bound = kc.bind_eval_result(res, cand, "base", empty)
+    assert bound["_bound"] is False
+    assert any("eval_corpus_sha256" in e for e in bound["_bind_errors"])
+
+
+def test_eval_result_with_failures_is_not_a_pass(repo_root):
+    corpus = os.path.join(repo_root, "evals")
+    cand = _candidate()
+    res = _eval_result(cand, "base", corpus, passed=True, failures=["case-x"])
+    bound = kc.bind_eval_result(res, cand, "base", corpus)
+    assert bound["_bound"] is False and bound["passed"] is False
+
+
+def test_derive_change_facts_catches_modified_eval(monkeypatch):
+    """A git-derived diff surfaces a modified/removed eval even if a caller would
+    have 'forgotten' to list it (defect 5)."""
+    rows = [("M", "knowledge/bootstrap/github-actions.jsonl"),
+            ("M", "evals/cases/knowledge-rollback-rejected.yaml"),
+            ("D", "evals/cases/old-case.yaml"),
+            ("A", "evals/cases/new-case.yaml")]
+    monkeypatch.setattr(kc, "_git_diff_name_status", lambda rev: rows)
+    facts = kc.derive_change_facts("BASE")
+    assert "knowledge/bootstrap/github-actions.jsonl" in facts["change_paths"]
+    # modified + deleted evals are weakenings; an ADDED eval is not.
+    assert facts["removed_or_modified_evals"] == [
+        "evals/cases/knowledge-rollback-rejected.yaml", "evals/cases/old-case.yaml"]
+
+
+def test_resolve_baseline_requires_explicit_baseline():
+    """No working-tree fallback: a promotion without a baseline fails closed."""
+    args = types.SimpleNamespace(baseline=None, baseline_verified=False)
+    try:
+        kc._resolve_baseline(args)
+        assert False, "expected CompileError"
+    except kc.CompileError as exc:
+        assert "baseline is required" in str(exc)
+
+
+def test_resolve_change_facts_requires_git_or_explicit_untrusted():
+    args = types.SimpleNamespace(trust_caller_diff=False, baseline_commit=None)
+    try:
+        kc._resolve_change_facts(args)
+        assert False, "expected CompileError"
+    except kc.CompileError as exc:
+        assert "baseline-commit" in str(exc)
+
+
+def _write_pack(root, entries):
+    os.makedirs(os.path.join(root, "bootstrap"), exist_ok=True)
+    with open(os.path.join(root, "bootstrap", "p.jsonl"), "w") as fh:
+        for e in entries:
+            fh.write(json.dumps(e) + "\n")
+
+
+def _active(**over):
+    e = {"id": "KE-x", "kind": "platform-semantics", "platform": "github-actions",
+         "subject": "s", "claim": "c", "valid_from": "2026-01-01",
+         "status": "active", "confidence": "authoritative",
+         "sources": [{"url": "https://docs.github.com/x", "authority": 100}]}
+    e.update(over)
+    return e
+
+
+def test_verify_promotions_bootstrap_snapshot_ok(repo_root, knowledge_dir):
+    """The shipped bootstrap: every active entry is accounted for by the digest-
+    bound bootstrap approval."""
+    reg = kc.load_registry(knowledge_dir)
+    corpus = os.path.join(repo_root, "evals")
+    baseline_entries = kc._load_existing(knowledge_dir)
+    baseline_digest = kc._baseline_manifest_sha256(knowledge_dir)
+    res = kc.verify_promotions(
+        knowledge_dir, os.path.join(knowledge_dir, "promotions"),
+        baseline_entries, baseline_digest, reg, corpus,
+        {"change_paths": [], "removed_or_modified_evals": []})
+    assert res["ok"] is True, res["failures"]
+    assert res["active"] == len(res["accounted"])
+
+
+def test_verify_promotions_unaccounted_active_entry_fails(tmp_path, repo_root,
+                                                          knowledge_dir):
+    reg = kc.load_registry(knowledge_dir)
+    corpus = os.path.join(repo_root, "evals")
+    root = str(tmp_path / "k")
+    _write_pack(root, [_active(id="KE-unaccounted")])
+    os.makedirs(os.path.join(root, "promotions"))  # empty: nothing accounts for it
+    res = kc.verify_promotions(
+        root, os.path.join(root, "promotions"), [], "base", reg, corpus,
+        {"change_paths": [], "removed_or_modified_evals": []})
+    assert res["ok"] is False
+    assert any(f["id"] == "KE-unaccounted" for f in res["failures"])
+
+
+def test_verify_promotions_edited_bootstrap_entry_digest_mismatch_fails(
+        tmp_path, repo_root, knowledge_dir):
+    reg = kc.load_registry(knowledge_dir)
+    corpus = os.path.join(repo_root, "evals")
+    root = str(tmp_path / "k")
+    entry = _active(id="KE-boot")
+    _write_pack(root, [entry])
+    promo = os.path.join(root, "promotions")
+    os.makedirs(promo)
+    # Approve a DIFFERENT digest (as if the entry was edited after approval).
+    with open(os.path.join(promo, "bootstrap.approval.json"), "w") as fh:
+        json.dump({"_type": "attestarc-bootstrap-approval", "approved_by": "x",
+                   "entries": {"KE-boot": "0" * 64}}, fh)
+    res = kc.verify_promotions(
+        root, promo, [], "base", reg, corpus,
+        {"change_paths": [], "removed_or_modified_evals": []})
+    assert res["ok"] is False
+    assert any("digest does not match" in f["reason"] for f in res["failures"])
+
+
+def test_verify_promotions_auto_promote_decision_recomputes(tmp_path, repo_root,
+                                                            knowledge_dir):
+    """A per-entry auto-promote decision is accepted only if it still recomputes to
+    auto-promote from the pinned baseline + git diff + bound eval-result."""
+    reg = kc.load_registry(knowledge_dir)
+    corpus = os.path.join(repo_root, "evals")
+    root = str(tmp_path / "k")
+    entry = _active(id="KE-promoted")
+    _write_pack(root, [entry])
+    promo = os.path.join(root, "promotions")
+    os.makedirs(promo)
+    baseline_digest = "base-digest"
+    candidate = {k: v for k, v in entry.items()
+                 if k not in ("status", "confidence")}
+    ev = _eval_result(candidate, baseline_digest, corpus)
+    decision = {"_type": "attestarc-promotion-decision", "entry_id": "KE-promoted",
+                "entry_sha256": kc.canonical_entry_digest(entry),
+                "baseline_manifest_sha256": baseline_digest, "tier": "auto-promote",
+                "provenance": "promoted", "decided_at": "2026-08-24T00:00:00Z",
+                "eval_result": ev}
+    with open(os.path.join(promo, "KE-promoted.decision.json"), "w") as fh:
+        json.dump(decision, fh)
+    res = kc.verify_promotions(
+        root, promo, [], baseline_digest, reg, corpus,
+        {"change_paths": [], "removed_or_modified_evals": []})
+    assert res["ok"] is True, res["failures"]
+    assert res["accounted"] == ["KE-promoted"]
+
+
+def test_verify_promotions_review_decision_needs_approval(tmp_path, repo_root,
+                                                          knowledge_dir):
+    reg = kc.load_registry(knowledge_dir)
+    corpus = os.path.join(repo_root, "evals")
+    root = str(tmp_path / "k")
+    entry = _active(id="KE-review")
+    _write_pack(root, [entry])
+    promo = os.path.join(root, "promotions")
+    os.makedirs(promo)
+    base = {"_type": "attestarc-promotion-decision", "entry_id": "KE-review",
+            "entry_sha256": kc.canonical_entry_digest(entry),
+            "baseline_manifest_sha256": "base", "tier": "require-review"}
+    # No review.approved_by -> fails.
+    with open(os.path.join(promo, "KE-review.decision.json"), "w") as fh:
+        json.dump(base, fh)
+    res = kc.verify_promotions(root, promo, [], "base", reg, corpus,
+                               {"change_paths": [], "removed_or_modified_evals": []})
+    assert res["ok"] is False
+    # With a recorded approval -> accounted.
+    base["review"] = {"approved_by": "avishayil", "pr": "#1"}
+    with open(os.path.join(promo, "KE-review.decision.json"), "w") as fh:
+        json.dump(base, fh)
+    res = kc.verify_promotions(root, promo, [], "base", reg, corpus,
+                               {"change_paths": [], "removed_or_modified_evals": []})
+    assert res["ok"] is True, res["failures"]
+
+
+def test_promotions_dir_is_root_of_trust():
+    facts = kc.classify_change_paths(["knowledge/promotions/KE-x.decision.json"])
+    assert facts["changes_root_of_trust"] is True

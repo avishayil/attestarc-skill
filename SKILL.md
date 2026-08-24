@@ -270,21 +270,28 @@ and runs where no untrusted repository is open. Its deterministic helper steps:
    `evaluate` (validate → conflict → semantic diff → derived direction →
    may-promote); it refuses to promote an unvalidated candidate. Everything is
    **derived**: authority from the reclassified sources; conflict and the
-   `added`/`modified` **semantic diff** from the **immutable baseline** (`--baseline`,
-   the last released snapshot, never the working tree); the security **direction**
-   from the claim's `effect` + that diff. You supply only the **eval-result artifact**
-   (a small JSON; absent or not-passing fails closed) and the proposed change paths.
-   Report the tier; do not act beyond it:
+   `added`/`modified` **semantic diff** from a **mandatory, pinned immutable baseline**
+   (`--baseline <root>` for the last released snapshot, or `--baseline-verified` to
+   resolve the installed verified snapshot — never the working tree); the changed-path
+   and eval diff **from git** (`--baseline-commit <rev>`, not caller flags); the
+   security **direction** from the claim's `effect` + that diff. You supply only the
+   **eval-result artifact** — and it counts only when it is **digest-bound** to the
+   candidate, baseline, and eval corpus (a bare `{"passed": true}`, or a result reused
+   from a different candidate/baseline/corpus, fails closed). Report the tier; do not
+   act beyond it:
 
    ```bash
    printf '%s' "$CANDIDATE" | python "$ATTESTARC/scripts/knowledge_compile.py" \
      evaluate --quarantine-dir ~/.attestarc/quarantine --baseline "$ATTESTARC/knowledge" \
-     --eval-result eval-result.json --change-path knowledge/bootstrap/github-actions.jsonl
+     --eval-result eval-result.json --baseline-commit "$PREV_RELEASE_SHA"
    ```
 
    Only on an `auto-promote` tier does `promote` emit the trusted verified entry
    (assigning `status`/`confidence` + receipt-derived provenance); it refuses on any
-   other tier.
+   other tier. Record the decision under `knowledge/promotions/<entry-id>.decision.json`
+   (digest + baseline + tier + bound eval-result) — at release, `verify-promotions`
+   recomputes every active entry's decision and fails the build unless each is
+   accounted for, so promotion is the only path to a shipped active entry.
 
 Modifying, superseding, or conflicting with an active claim (an additive edit counts
 even without `supersedes`), a security-negative/uncertain direction, a low-authority

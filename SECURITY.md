@@ -175,11 +175,21 @@ affected findings rather than silently resolving them.
   self-declared source authority); a **deterministic** policy assigns those and
   promotes. Promotion demands a **self-verifying** quarantine receipt (stored bytes
   re-hash to the receipt id; cross-origin redirects rejected), computes conflict and
-  a semantic diff against the **immutable** last-released snapshot (never the working
-  tree), **derives** the security direction (a lowering or uncertain change routes to
-  review — never read from a model field), and consumes a passing **eval-result
-  artifact** (missing → fail closed). An additive edit of an active entry routes to
-  review even without an explicit supersede.
+  a semantic diff against a **mandatory, pinned** last-released snapshot (never the
+  working tree, and the changed-path/eval diff is **derived from git**, not from
+  caller flags), **derives** the security direction (a lowering or uncertain change
+  routes to review — never read from a model field), and consumes a **digest-bound**
+  passing **eval-result artifact** — bound to the candidate, baseline, and eval
+  corpus, so a bare `{"passed": true}` or a recycled result never counts (missing or
+  unbound → fail closed). An additive edit of an active entry routes to review even
+  without an explicit supersede.
+- **Promotion is enforced at release** — the tier seen in a PR is not, by itself, what
+  ships. `verify-promotions` runs in the release workflow before the manifest is built
+  and fails the release unless every active shipped entry is accounted for by the
+  digest-pinned bootstrap approval, a still-recomputing auto-promote decision, or a
+  review-tier decision with a recorded approver (`knowledge/promotions/`). This makes
+  the promotion policy the **only** path to a shipped active entry, not merely *a* path
+  a hand-edited pack could sidestep.
 - **Secrets stay out** — secret values are never persisted to `findings.json` —
   not even as a hash (a low-entropy secret is recoverable from its sha256, so a
   secret-like injection attempt is recorded with the hash withheld) — and secrets or
@@ -198,11 +208,13 @@ package.** The trust-critical surfaces, and example concerns for each, are:
   or a verification helper that returns a verdict rather than a fact.
 - **Knowledge plane** (`knowledge/`, `scripts/knowledge.py`,
   `scripts/knowledge_verify.py`, `scripts/knowledge_compile.py`,
-  `knowledge/trust-anchor.json`, `knowledge/sources.yaml`) — e.g. a candidate that
-  drives a conclusion without passing the verify-gate; knowledge promoted without a
-  valid, identity-matched attestation; a forged bundle or revocation being trusted;
-  authority taken from a candidate's self-declaration rather than derived from the
-  source registry.
+  `knowledge/trust-anchor.json`, `knowledge/sources.yaml`, `knowledge/promotions/`,
+  `schemas/eval-result.schema.json`) — e.g. a candidate that drives a conclusion
+  without passing the verify-gate; an active pack entry shipped without going through
+  the promotion policy (a hand-edited pack); a recycled or unbound eval-result
+  satisfying auto-promote; knowledge promoted without a valid, identity-matched
+  attestation; a forged bundle or revocation being trusted; authority taken from a
+  candidate's self-declaration rather than derived from the source registry.
 - **Release / attestation** (`.github/workflows/release-knowledge.yml`) — e.g. a
   bundle published without provenance, an attestation minted from an unreviewed ref, or
   an old reviewed commit retagged as a higher version (the bundle job runs only on a

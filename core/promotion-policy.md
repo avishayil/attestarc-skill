@@ -48,10 +48,18 @@ origins agree, else `authoritative`), and copies each source's provenance from t
   `redirect_chain`; a redirect that crosses origin (scheme+host) off the final
   origin is marked not-allowed and cannot back a promotion.
 - **Conflict** — does the claim contradict an existing *authoritative* entry in the
-  **immutable baseline** (the last verified released snapshot, never the working
-  tree that carries the proposal)?
+  **immutable baseline**? The baseline is **mandatory and pinned**: it is the last
+  verified released snapshot, resolved from the installed **verified** snapshot
+  (`resolve_verified_baseline`, which fails closed if none is trusted) or an
+  explicit `--baseline <root>`. The working tree that carries the proposal is
+  **never** an implicit baseline — judging a candidate against the tree that already
+  contains it would erase every conflict/modify signal.
 - **Semantic diff** — against that same baseline, is the candidate `added` (new
   id) or `modified` (same id, changed `claim`/`claim_key`/`applies_to`/`effect`)?
+  The set of changed paths and removed/modified evals is **derived from git**
+  (`git diff --name-status <baseline-commit> HEAD`), not from caller-supplied flags,
+  so a caller cannot omit the path that carries a poisoning edit. (Caller flags are
+  honored only behind an explicitly-untrusted `--trust-caller-diff`, for tests.)
   Any modify of an existing **active** entry — or a supersession of one — is a
   change to established security semantics and routes to review **even when
   `supersedes` was not written** (an additive edit cannot dodge the trigger).
@@ -62,9 +70,18 @@ origins agree, else `authoritative`), and copies each source's provenance from t
   modification of an active semantic is **uncertain**. Both negative and uncertain
   route to review (fail toward scrutiny). A new `risk-increasing` claim is
   **positive**.
-- **Eval result** — the policy consumes an **eval-result artifact** (a small JSON
-  the eval step emits, e.g. `{"passed": true, "corpus_sha": …, "cases": N}`).
-  Absent or `passed: false` **fails closed** (blocks auto-promote).
+- **Eval result** — the policy consumes an **eval-result artifact**
+  (`schemas/eval-result.schema.json`) that is trusted ONLY when it is **digest-bound**
+  to the exact inputs it was produced over: `candidate_sha256` (the canonical digest
+  of the entry being promoted), `baseline_manifest_sha256` (the immutable baseline it
+  was judged against), and `eval_corpus_sha256` (the trusted eval corpus).
+  `_load_eval_result_verified` recomputes all three and **rejects** the result on any
+  mismatch, so a bare `{"passed": true}` — or a passing result recycled from a
+  different candidate/baseline/corpus — can never satisfy the gate. `passed` is honored
+  only with an empty `failures` list. Absent, unbound, or `passed: false` **fails
+  closed** (blocks auto-promote). This is **not** an eval-runner: the behavioral evals
+  stay manually judged; what the artifact binds is that a given judgement belongs to a
+  given change.
 - **Provenance / attestation (distribution trust)** — for published packs, a valid
   Sigstore build-provenance attestation whose identity matches the external trust
   anchor (`knowledge/trust-anchor.json`), verified via `gh attestation verify` in
@@ -84,8 +101,8 @@ semantic diff → direction → may-promote.
 **Auto-promote** — all of: candidate passed validation + authoritative source
 (derived authority ≥ 90) bound to a self-verifying quarantine receipt + no conflict
 with an authoritative entry + does not modify or supersede an active claim + a
-non-negative, non-uncertain derived direction + a passing eval-result artifact +
-(for published packs) no failed attestation.
+non-negative, non-uncertain derived direction + a **bound** passing eval-result
+artifact (see above) + (for published packs) no failed attestation.
 
 **Require review (single-maintainer PR)** — any of: the change supersedes,
 conflicts with, or otherwise **modifies an existing active/authoritative claim** (a
@@ -98,9 +115,39 @@ pack's attestation failed.
 `core/agent-safety.md`, `core/promotion-policy.md`, `scripts/knowledge_verify.py`,
 `scripts/knowledge.py`, `scripts/knowledge_compile.py`, `knowledge/sources.yaml`,
 `knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json`,
-`schemas/learning-candidate.schema.json`, the release workflow
-(`.github/workflows/release-knowledge.yml`), **or any weakening or deletion of a
-trusted eval.**
+`schemas/learning-candidate.schema.json`, `schemas/eval-result.schema.json`,
+anything under `knowledge/promotions/` (the promotion decisions and the bootstrap
+approval), the release workflow (`.github/workflows/release-knowledge.yml`), **or any
+weakening or deletion of a trusted eval.**
+
+## Promotion is enforced at release, not merely at proposal
+
+`may_promote` decides a tier when a candidate is *proposed*, but a tier a maintainer
+saw in a PR is not, by itself, what ships. The floor is **recomputed at release** so
+that `promote_to_verified` is the **only** path to a shipped active entry — not merely
+*a* path a hand-edited pack could sidestep.
+
+Each promotion is recorded as a committed, reviewed artifact under
+`knowledge/promotions/`:
+- `<entry-id>.decision.json` — binds the promoted entry's canonical digest
+  (`entry_sha256`), the baseline it was judged against (`baseline_manifest_sha256`),
+  the tier, the bound eval-result, and (for a review tier) the recorded
+  `review.approved_by`.
+- `bootstrap.approval.json` — the digest-pinned two-party approval of the
+  hand-authored entries that rode in on the signed skill release (which predate the
+  pipeline and carry no quarantine receipts); recorded once, one canonical digest per
+  entry id.
+
+`knowledge_compile.py verify-promotions` runs in the release workflow **before the
+manifest is built** and fails the release unless **every active entry** in the packs
+is accounted for by exactly one of: a matching bootstrap-approval digest; an
+`auto-promote` decision whose digest + baseline match and which **still recomputes**
+to `auto-promote` from the pinned baseline + git-derived diff + rebound eval-result;
+or a review-tier decision with a recorded approver. An entry that was edited after its
+decision (digest mismatch), whose auto-promote decision no longer recomputes, or that
+nothing accounts for, is a hard failure. This gate does not re-run quarantine/fetch —
+provenance is a promotion-time property recorded in the decision; it recomputes only
+what is reproducible from shipped material.
 
 **Never auto-promote** — blog post, issue comment, researcher claim, forum post,
 or model inference. These are recorded as **candidate** only. Candidate knowledge
