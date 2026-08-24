@@ -1,131 +1,54 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://attestarc.dev/schemas/knowledge-manifest-1.json",
-  "title": "AttestArc knowledge-plane TUF-inspired metadata",
-  "description": "Trust metadata for the verified-knowledge plane. Four role files (root, timestamp, snapshot, targets) form a delegation chain the deterministic verifier (scripts/knowledge_verify.py) walks before any pack is trusted. In 'bootstrap' mode the packs are trusted because they ship inside the SSH-signed skill release; the first signed knowledge release flips 'mode' to 'signed' and populates role keys/signatures. Signatures are detached SSH signatures (X.json.sig), namespace 'attestarc-knowledge', verified with the system ssh-keygen -Y verify (no Python crypto dependency).",
+  "$id": "https://attestarc.dev/schemas/knowledge-manifest-2.json",
+  "title": "AttestArc knowledge-plane trust metadata (attestation model)",
+  "description": "Two documents anchor the verified-knowledge plane. (1) trust-anchor.json ships inside the SSH-signed skill release and is the external root of trust: it pins the Sigstore/OIDC identity (repo + signer workflow + issuer) that a downloaded knowledge bundle's build-provenance attestation MUST match. It lives outside any downloaded bundle and is never overwritten by refresh. (2) manifest.json describes one atomic knowledge release, pinning every pack by sha256+size with a monotonic version and a chain to the previous manifest; it is the artifact the release workflow attests (see scripts/knowledge_verify.py, .github/workflows/release-knowledge.yml). The homemade root/timestamp/snapshot/targets role files are removed: trust no longer derives from metadata the bundle supplies about itself.",
   "oneOf": [
-    {"$ref": "#/definitions/root"},
-    {"$ref": "#/definitions/timestamp"},
-    {"$ref": "#/definitions/snapshot"},
-    {"$ref": "#/definitions/targets"}
+    {"$ref": "#/definitions/trust_anchor"},
+    {"$ref": "#/definitions/manifest"}
   ],
   "definitions": {
-    "role_spec": {
+    "trust_anchor": {
       "type": "object",
-      "required": ["keyids", "threshold"],
-      "additionalProperties": false,
-      "properties": {
-        "keyids": {"type": "array", "items": {"type": "string"}},
-        "threshold": {"type": "integer", "minimum": 1}
-      }
-    },
-    "key": {
-      "type": "object",
-      "required": ["keytype", "keyval"],
-      "additionalProperties": false,
-      "properties": {
-        "keytype": {"type": "string", "description": "e.g. ssh-ed25519"},
-        "identity": {"type": "string", "description": "allowed-signers principal (e.g. maintainer email)"},
-        "keyval": {
-          "type": "object",
-          "required": ["public"],
-          "additionalProperties": false,
-          "properties": {"public": {"type": "string", "description": "OpenSSH public key line"}}
-        }
-      }
-    },
-    "root": {
-      "type": "object",
-      "required": ["_type", "version", "expires", "mode", "keys", "roles"],
+      "required": ["_type", "repo", "signer_workflow", "cert_oidc_issuer"],
       "additionalProperties": true,
       "properties": {
-        "_type": {"const": "root"},
+        "_type": {"const": "attestarc-trust-anchor"},
         "spec_version": {"type": "string"},
-        "version": {"type": "integer", "minimum": 1},
-        "expires": {"type": "string", "format": "date-time"},
-        "consistent_snapshot": {"type": "boolean"},
-        "mode": {"enum": ["bootstrap", "signed"]},
         "comment": {"type": "string"},
-        "keys": {"type": "object", "additionalProperties": {"$ref": "#/definitions/key"}},
-        "roles": {
-          "type": "object",
-          "required": ["root", "timestamp", "snapshot", "targets"],
-          "additionalProperties": false,
-          "properties": {
-            "root": {"$ref": "#/definitions/role_spec"},
-            "timestamp": {"$ref": "#/definitions/role_spec"},
-            "snapshot": {"$ref": "#/definitions/role_spec"},
-            "targets": {"$ref": "#/definitions/role_spec"}
-          }
-        }
+        "repo": {"type": "string", "description": "owner/repo that must have produced the attestation"},
+        "signer_workflow": {"type": "string", "description": "workflow path that must have signed (gh attestation verify --signer-workflow)"},
+        "signer_workflow_ref": {"type": "string"},
+        "cert_identity_regexp": {"type": "string", "description": "SAN identity regexp the signing certificate must match"},
+        "cert_oidc_issuer": {"type": "string", "description": "expected OIDC issuer (Sigstore Fulcio), e.g. https://token.actions.githubusercontent.com"},
+        "bootstrap_manifest": {"type": "string", "description": "path (relative to the package knowledge root) of the in-package bootstrap manifest"},
+        "client_state_dir": {"type": "string", "description": "directory holding the persistent trusted-state.json (outside any repo)"}
       }
     },
-    "meta_entry": {
+    "pack": {
       "type": "object",
-      "required": ["version", "sha256"],
+      "required": ["name", "sha256", "size"],
       "additionalProperties": false,
       "properties": {
-        "version": {"type": "integer", "minimum": 1},
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-      }
-    },
-    "timestamp": {
-      "type": "object",
-      "required": ["_type", "version", "expires", "meta"],
-      "additionalProperties": true,
-      "properties": {
-        "_type": {"const": "timestamp"},
-        "spec_version": {"type": "string"},
-        "version": {"type": "integer", "minimum": 1},
-        "expires": {"type": "string", "format": "date-time"},
-        "meta": {
-          "type": "object",
-          "required": ["snapshot.json"],
-          "additionalProperties": false,
-          "properties": {"snapshot.json": {"$ref": "#/definitions/meta_entry"}}
-        }
-      }
-    },
-    "snapshot": {
-      "type": "object",
-      "required": ["_type", "version", "expires", "meta"],
-      "additionalProperties": true,
-      "properties": {
-        "_type": {"const": "snapshot"},
-        "spec_version": {"type": "string"},
-        "version": {"type": "integer", "minimum": 1},
-        "expires": {"type": "string", "format": "date-time"},
-        "meta": {
-          "type": "object",
-          "required": ["targets.json"],
-          "additionalProperties": false,
-          "properties": {"targets.json": {"$ref": "#/definitions/meta_entry"}}
-        }
-      }
-    },
-    "target": {
-      "type": "object",
-      "required": ["name", "version", "sha256", "size", "valid_from"],
-      "additionalProperties": false,
-      "properties": {
-        "name": {"type": "string"},
-        "version": {"type": "integer", "minimum": 1},
-        "previous_version": {"type": "integer", "minimum": 0},
+        "name": {"type": "string", "description": "path relative to the knowledge root, e.g. bootstrap/github-actions.jsonl"},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "size": {"type": "integer", "minimum": 0},
-        "valid_from": {"type": "string", "format": "date"}
+        "size": {"type": "integer", "minimum": 0}
       }
     },
-    "targets": {
+    "manifest": {
       "type": "object",
-      "required": ["_type", "version", "expires", "targets"],
+      "required": ["_type", "version", "created_at", "expires", "packs"],
       "additionalProperties": true,
       "properties": {
-        "_type": {"const": "targets"},
+        "_type": {"const": "attestarc-knowledge-manifest"},
         "spec_version": {"type": "string"},
-        "version": {"type": "integer", "minimum": 1},
-        "expires": {"type": "string", "format": "date-time"},
-        "targets": {"type": "array", "items": {"$ref": "#/definitions/target"}}
+        "version": {"type": "integer", "minimum": 1, "description": "monotonic release version; a client rejects version <= its highest trusted version"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "expires": {"type": "string", "format": "date-time", "description": "short TTL (freeze protection); a downloaded manifest past expiry is rejected, an in-package bootstrap snapshot past expiry warns but remains the last-known-good floor"},
+        "prev_digest": {"type": ["string", "null"], "description": "sha256 of the previous manifest.json (chain), or null for the first release"},
+        "comment": {"type": "string"},
+        "mode": {"description": "OPTIONAL and defensive: a downloaded bundle declaring 'bootstrap' is rejected. Bootstrap trust is conferred only by being the immutable in-package snapshot, never by a self-declared field.", "enum": ["bootstrap", "signed"]},
+        "packs": {"type": "array", "items": {"$ref": "#/definitions/pack"}}
       }
     }
   }

@@ -1,0 +1,12 @@
+{
+  "_type": "attestarc-trust-anchor",
+  "spec_version": "1.0",
+  "comment": "External trust anchor for the AttestArc knowledge plane. This file ships INSIDE the SSH-signed skill release and is the one root of trust that lives OUTSIDE any downloaded knowledge bundle. A downloaded bundle is trusted ONLY when its Sigstore build-provenance attestation matches the identity pinned here (repo + signer_workflow + oidc_issuer); a bundle can never declare its own trust ('mode: bootstrap' is valid only for the immutable in-package snapshot). Root-of-trust: changes require two-party review (see core/promotion-policy.md).",
+  "repo": "avishayil/attestarc-skill",
+  "signer_workflow": ".github/workflows/release-knowledge.yml",
+  "signer_workflow_ref": "refs/heads/main",
+  "cert_identity_regexp": "^https://github.com/avishayil/attestarc-skill/\\.github/workflows/release-knowledge\\.yml@.*$",
+  "cert_oidc_issuer": "https://token.actions.githubusercontent.com",
+  "bootstrap_manifest": "manifest.json",
+  "client_state_dir": "~/.attestarc/knowledge"
+}

@@ -163,12 +163,21 @@ def test_learning_candidate_vocabulary(schemas_dir):
 
 
 def test_knowledge_manifest_role_types(schemas_dir):
+    """The attestation model: the metadata schema anchors exactly two documents —
+    the external trust_anchor and the per-release manifest. The homemade
+    root/timestamp/snapshot/targets role files are gone."""
     with open(os.path.join(schemas_dir, "knowledge-manifest.schema.json")) as fh:
         schema = json.load(fh)
     consts = {branch["$ref"].split("/")[-1] for branch in schema["oneOf"]}
-    assert consts == {"root", "timestamp", "snapshot", "targets"}
-    assert schema["definitions"]["root"]["properties"]["mode"]["enum"] == [
-        "bootstrap", "signed"]
+    assert consts == {"trust_anchor", "manifest"}
+    anchor = schema["definitions"]["trust_anchor"]
+    assert {"_type", "repo", "signer_workflow", "cert_oidc_issuer"} <= set(
+        anchor["required"])
+    manifest = schema["definitions"]["manifest"]
+    assert {"_type", "version", "created_at", "expires", "packs"} <= set(
+        manifest["required"])
+    # mode is optional + defensive: a downloaded bundle claiming bootstrap is rejected.
+    assert manifest["properties"]["mode"]["enum"] == ["bootstrap", "signed"]
 
 
 def test_assessor_safety_event_has_content_hash(schemas_dir):
