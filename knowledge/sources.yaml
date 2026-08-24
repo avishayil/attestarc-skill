@@ -1,0 +1,58 @@
+# AttestArc source registry — the root of source authority.
+#
+# Authority is assigned HERE, deterministically, never by the model. The Updater
+# (scripts/knowledge_compile.py) reads this file to classify a fetched document's
+# domain into a source type and its registry authority tier. A domain absent from
+# `allowlist` is `arbitrary-web` (authority 0) and MUST NOT be fetched by the
+# refresh mode nor drive a promotion. See core/promotion-policy.md and
+# THREAT_MODEL.md §6.
+#
+# Format is a deliberately small YAML subset (comments, one `tiers:` mapping of
+# type -> integer, and one `allowlist:` list of {domain, publisher, type}
+# records) so it is parsed by a scoped stdlib reader — no YAML dependency.
+
+# Authority tiers. Mirrors the enum in schemas/knowledge.schema.json; the two
+# MUST agree. Higher = more trusted. Only >= 90 can auto-promote.
+tiers:
+  vendor-docs: 100
+  vendor-changelog: 95
+  vendor-repo: 90
+  standard: 90
+  security-org: 80
+  research: 60
+  issue: 40
+  community: 20
+  arbitrary-web: 0
+
+# Fetch allowlist. The refresh mode may fetch ONLY these domains. Each maps a
+# domain to its publisher and source type; the type resolves to an authority via
+# `tiers`. Subdomains match their parent entry (docs.github.com matches a
+# github.com entry only if github.com is listed; list the exact host you trust).
+allowlist:
+  - domain: docs.github.com
+    publisher: GitHub
+    type: vendor-docs
+  - domain: github.blog
+    publisher: GitHub
+    type: vendor-changelog
+  - domain: github.com
+    publisher: GitHub
+    type: vendor-repo
+  - domain: raw.githubusercontent.com
+    publisher: GitHub
+    type: vendor-repo
+  - domain: slsa.dev
+    publisher: SLSA
+    type: standard
+  - domain: openssf.org
+    publisher: OpenSSF
+    type: security-org
+  - domain: best.openssf.org
+    publisher: OpenSSF
+    type: security-org
+  - domain: csrc.nist.gov
+    publisher: NIST
+    type: standard
+  - domain: www.rfc-editor.org
+    publisher: IETF
+    type: standard
