@@ -446,7 +446,32 @@ def open_verified(knowledge_root=None, now=None):
     This is the only path the assessor should use; ``load_packs`` is raw and is
     reserved for tests and the compiler.
     """
+    auto = knowledge_root is None
     root = knowledge_root or resolve_active_snapshot()
+    entries, verification, consistency, trusted = _open_at(root, now)
+    # Resilient bundled fallback: when the caller did not pin a root and the
+    # dynamically-resolved snapshot (a refreshed LKG) fails to verify, fall back to
+    # the verified in-package bootstrap rather than returning an untrusted set. This
+    # matches the documented behavior — a refreshed snapshot that goes bad degrades
+    # to the last-known-good floor that shipped with the package.
+    if auto and not trusted and os.path.abspath(root) != os.path.abspath(
+            _DEFAULT_KNOWLEDGE_ROOT):
+        b_entries, b_verification, b_consistency, b_trusted = _open_at(
+            _DEFAULT_KNOWLEDGE_ROOT, now)
+        if b_trusted:
+            b_verification = dict(b_verification)
+            b_verification.setdefault("warnings", [])
+            b_verification["warnings"] = list(b_verification["warnings"]) + [
+                f"active snapshot {root} failed verification; fell back to the "
+                "in-package bootstrap"]
+            b_verification["fell_back_to_bootstrap"] = True
+            return b_entries, b_verification, b_consistency
+    return entries, verification, consistency
+
+
+def _open_at(root, now=None):
+    """Verify + load a specific snapshot root. Returns
+    ``(entries, verification, consistency, trusted)``. Never raises."""
     verification = knowledge_verify.verify_installed(knowledge_root=root, now=now)
     entries, summaries = load_packs(os.path.abspath(root))
     consistency = check_consistency(entries)
@@ -481,7 +506,7 @@ def open_verified(knowledge_root=None, now=None):
     if not trusted:
         for e in entries:
             e["_untrusted"] = True
-    return entries, verification, consistency
+    return entries, verification, consistency, trusted
 
 
 # --------------------------------------------------------------------------- #

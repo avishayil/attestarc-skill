@@ -126,9 +126,12 @@ verify_download  (Updater; network/gh)          verify_installed (Assessor; no n
 Actually installing it and advancing the high-water mark is done by exactly one
 path — `knowledge_verify.py install` — which **verifies the archive's own
 attestation before extracting it**, then **safe-extracts** the archive (refusing
-absolute paths, `..`, and symlink/hardlink members before writing anything),
-re-verifies the staged bytes, atomically renames the snapshot into place, and only
-then atomically advances client state. Rollback memory (`~/.attestarc/state/`) and
+absolute paths, `..`, and symlink/hardlink members, and refusing a decompression
+bomb via member-count and per-file/total uncompressed-size caps, before writing
+anything), re-verifies the staged bytes, runs the **same semantic gate the assessor
+uses** (`validate_snapshot` + consistency + parse-completeness) so an attested-but-
+invalid snapshot can never advance the high-water mark, atomically renames the
+snapshot into place, and only then atomically advances client state. Rollback memory (`~/.attestarc/state/`) and
 installed snapshots (`~/.attestarc/knowledge/snapshots/`) live in separate
 directories, and a *corrupt* (not merely absent) client-state file fails closed:
 the Updater refuses to advance and the assessor falls back to the in-package
@@ -147,8 +150,11 @@ the client's own persistent memory (`~/.attestarc/state/trusted-state.json`),
 never a value inside the bundle. A compromised version can be revoked via an
 **attested kill switch** ([`THREAT_MODEL.md`](THREAT_MODEL.md) §8): the single
 public path attestation-verifies the revocation record against the anchor, rolls
-the active snapshot back to the last retained non-revoked one, and re-observes
-affected findings rather than silently resolving them.
+the active snapshot back to the last retained non-revoked one — **re-verifying that
+rollback target** (integrity + recorded-digest match + semantic gate) before
+adopting it, so a tampered retained snapshot is never silently reinstated, and
+falling back to the in-package bootstrap if none verify — and re-observes affected
+findings rather than silently resolving them.
 
 ### Installing the package
 
@@ -181,7 +187,9 @@ verification you get:
   kernel; the running assessor can never grant itself more trust.
 - **Fail-secure** — a download with no valid, identity-matched attestation (or a
   tampered/rolled-back/frozen one) is **discarded** and the last-known-good
-  retained; unavailable knowledge falls back to the in-package snapshot; a stale
+  retained; unavailable knowledge — or an active refreshed snapshot that no longer
+  verifies at assessment time — falls back to the verified in-package snapshot rather
+  than reasoning over an untrusted set or aborting; a stale
   (expired) snapshot stays usable but its down-gate facts stop driving conclusions
   (only scrutiny-increasing facts keep driving); conflict or unknown version routes
   to `needs_review`. Never fetch-then-trust.

@@ -11,7 +11,11 @@ import tarfile
 
 import pytest
 
-from _pathsafe import PathEscapeError, is_within_root, safe_extract_tar
+from _pathsafe import (
+    PathEscapeError,
+    is_within_root,
+    safe_extract_tar,
+)
 
 
 def _add_bytes(tf, name, data=b"x"):
@@ -86,3 +90,42 @@ def test_extract_writes_nothing_when_any_member_unsafe(tmp_path):
         safe_extract_tar(archive, dest)
     # two-pass: nothing from the good member is left behind
     assert not os.path.exists(os.path.join(dest, "bundle", "good.txt"))
+
+
+# H6: resource limits (decompression-bomb defense-in-depth for the offline
+# extract-before-attest path). A small archive can declare enormous or
+# innumerable members; the caps bound the cost before the attestation gate runs.
+
+
+def test_extract_rejects_too_many_members(tmp_path):
+    archive = str(tmp_path / "many.tar")
+    with tarfile.open(archive, "w") as tf:
+        for i in range(6):
+            _add_bytes(tf, f"bundle/f{i}.txt", b"x")
+    dest = str(tmp_path / "out")
+    with pytest.raises(ValueError, match="members, exceeding"):
+        safe_extract_tar(archive, dest, max_members=5)
+    assert not os.path.exists(dest) or not os.listdir(dest)
+
+
+def test_extract_rejects_oversized_member_by_declared_size(tmp_path):
+    """A member whose header declares more than the per-file cap is refused in the
+    first (validate-only) pass, before any bytes are written."""
+    archive = str(tmp_path / "big.tar")
+    with tarfile.open(archive, "w") as tf:
+        _add_bytes(tf, "bundle/big.txt", b"x" * 2048)
+    dest = str(tmp_path / "out")
+    with pytest.raises(ValueError, match="per-file cap"):
+        safe_extract_tar(archive, dest, max_file_bytes=1024)
+    assert not os.path.exists(os.path.join(dest, "bundle", "big.txt"))
+
+
+def test_extract_rejects_oversized_total_by_declared_size(tmp_path):
+    archive = str(tmp_path / "tot.tar")
+    with tarfile.open(archive, "w") as tf:
+        _add_bytes(tf, "bundle/a.txt", b"x" * 800)
+        _add_bytes(tf, "bundle/b.txt", b"x" * 800)
+    dest = str(tmp_path / "out")
+    with pytest.raises(ValueError, match="total cap"):
+        safe_extract_tar(archive, dest, max_total_bytes=1000)
+    assert not os.path.exists(os.path.join(dest, "bundle", "a.txt"))

@@ -527,6 +527,39 @@ def _copy_declared(bundle_dir: str, dest_dir: str, pack_names) -> None:
         shutil.copyfile(src, dst)
 
 
+def _semantic_snapshot_gate(snapshot_dir, package_root=None) -> tuple:
+    """Run the SAME semantic gate the assessor read path (`knowledge.open_verified`)
+    uses, over a snapshot directory. Returns ``(ok, reason)``.
+
+    Byte integrity (pack hashes match the manifest) proves *these are the attested
+    bytes*; it does NOT prove the bytes obey the trust contract. This gate loads the
+    packs, requires the set to fully parse (a `parse_partial` pack fails closed),
+    checks `check_consistency` (no contradictory conclusion-driving entries), and
+    runs `validate_snapshot` against the PACKAGE registry (the root of trust — never
+    a registry from the snapshot being installed). Fail closed on any error: an
+    unvalidatable snapshot is not trustworthy, so `install` must not advance the
+    high-water mark to it (which would otherwise create a durable availability hole —
+    an attested-but-invalid snapshot the assessor then has to reject at read time)."""
+    try:
+        import knowledge
+        import knowledge_compile as kc
+        entries, summaries = knowledge.load_packs(os.path.abspath(snapshot_dir))
+        partial = [s["pack"] for s in summaries if s.get("parse_partial")]
+        if partial:
+            return False, f"packs did not fully parse: {partial}"
+        consistency = knowledge.check_consistency(entries)
+        if not consistency.get("consistent"):
+            return False, f"snapshot inconsistent: {consistency.get('conflicts')}"
+        pkg_knowledge = os.path.join(package_root or _PACKAGE_ROOT, "knowledge")
+        registry = kc.load_registry(pkg_knowledge)
+        snapshot = knowledge.validate_snapshot(entries, registry)
+        if not snapshot.get("valid"):
+            return False, f"snapshot violates trust contract: {snapshot['violations']}"
+    except Exception as exc:  # noqa: BLE001 — an unvalidatable snapshot fails closed
+        return False, f"semantic validation error: {exc}"
+    return True, "semantic gate passed"
+
+
 def install(bundle, anchor=None, client_state=None, now=None,
             offline_bundle=None, package_root=None) -> dict:
     """Verify a downloaded bundle and, only on success, install it as the active
@@ -606,6 +639,16 @@ def install(bundle, anchor=None, client_state=None, now=None,
             if not _verify_pack_integrity(staged_real, staged_manifest, report):
                 shutil.rmtree(tmp_final, ignore_errors=True)
                 return refuse("staged snapshot integrity mismatch")
+            # Semantic pre-install gate: byte integrity is necessary but not
+            # sufficient. Before advancing the high-water mark, require the staged
+            # snapshot to pass the SAME contract the assessor enforces at read time
+            # (schema/provenance/secret + consistency + full parse). Refusing here
+            # means an attested-but-invalid snapshot never becomes the durable LKG.
+            sem_ok, sem_detail = _semantic_snapshot_gate(staged_real, package_root)
+            report.check("staged:semantic", sem_ok, sem_detail)
+            if not sem_ok:
+                shutil.rmtree(tmp_final, ignore_errors=True)
+                return refuse(f"staged snapshot failed semantic gate: {sem_detail}")
             if os.path.exists(final):
                 shutil.rmtree(final)
             os.replace(tmp_final, final)
@@ -658,6 +701,33 @@ def _validate_revocation(rec) -> list:
                        for x in rv)):
         errs.append("revoked_versions must be a non-empty list of positive integers")
     return errs
+
+
+def _verify_historical_snapshot(hist, package_root=None) -> tuple:
+    """Verify a retained snapshot before it is adopted as ``current`` on rollback.
+
+    A revocation rolls the active snapshot back to the most recent retained
+    non-revoked one — but a retained snapshot on disk is not automatically safe to
+    trust again: it could have been corrupted or tampered since it was installed.
+    Before adopting it we re-check (a) its on-disk manifest digest still matches the
+    digest recorded in client-state history (anti-tamper), (b) pack byte integrity
+    against that manifest, and (c) the same semantic contract `install` enforced
+    (`_semantic_snapshot_gate`). Returns ``(ok, reason)``. A snapshot that fails is
+    skipped so rollback lands on an older good one — or on the bootstrap."""
+    path = hist.get("path")
+    if not (path and os.path.isdir(path)):
+        return False, "snapshot missing on disk"
+    report = _Report()
+    _, root_real, _ = resolve_within_root(path, path)
+    manifest, manifest_digest = _load_manifest(root_real, report)
+    if manifest is None:
+        return False, "manifest unreadable"
+    recorded = hist.get("manifest_sha256")
+    if recorded and manifest_digest != recorded:
+        return False, "on-disk manifest digest does not match recorded digest"
+    if not _verify_pack_integrity(root_real, manifest, report):
+        return False, "pack integrity mismatch"
+    return _semantic_snapshot_gate(root_real, package_root)
 
 
 def _apply_revocation(anchor, revoked_versions, client_state=None,
@@ -726,12 +796,20 @@ def verify_and_apply_revocation(revocation_path, anchor=None, client_state=None,
     if cur.get("version") in revoked:
         replacement = None
         for h in reversed(new_state.get("history") or []):
-            if (h.get("version") not in revoked and h.get("path")
-                    and os.path.isdir(h["path"])):
-                replacement = {"version": h["version"],
-                               "manifest_sha256": h.get("manifest_sha256"),
-                               "verified_via": "attestation", "path": h["path"]}
-                break
+            if h.get("version") in revoked:
+                continue
+            # Verify the retained snapshot BEFORE adopting it: a corrupted or
+            # tampered LKG must not be silently reinstated. On failure, skip to the
+            # next-older; if none verifies, replacement stays None (bootstrap).
+            hv_ok, hv_detail = _verify_historical_snapshot(h, package_root)
+            if not hv_ok:
+                report.warn(
+                    f"skipping rollback candidate v{h.get('version')}: {hv_detail}")
+                continue
+            replacement = {"version": h["version"],
+                           "manifest_sha256": h.get("manifest_sha256"),
+                           "verified_via": "attestation", "path": h["path"]}
+            break
         rolled_back_from = cur.get("version")
         new_state["current"] = replacement  # None => fall back to bootstrap
     save_client_state(anchor, new_state)

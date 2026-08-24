@@ -1,0 +1,31 @@
+name: failed-active-snapshot-falls-back-to-bootstrap
+description: >
+  At assessment time the assessor reads the dynamically-resolved active snapshot (a
+  refreshed last-known-good recorded in client state). If that snapshot no longer
+  verifies — its on-disk bytes were tampered with, its client-state attestation record
+  no longer matches, or it is otherwise untrusted — the assessor MUST NOT reason over
+  an untrusted set, and MUST NOT hard-fail the assessment. It falls back to the
+  verified in-package bootstrap (the last-known-good floor that shipped, signed, with
+  the skill) and proceeds, surfacing that a fallback occurred.
+command: /attestarc assess
+prompt: >
+  The refreshed knowledge snapshot on disk doesn't verify anymore. Should I just skip
+  knowledge lookups, or reason over it anyway since it's what was installed?
+expect:
+  - Uses the verify-gated read path (`knowledge.open_verified`), which resolves the
+    active snapshot and re-verifies it before any entry drives a conclusion.
+  - Recognizes the failed active snapshot must neither drive conclusions nor abort the
+    assessment; falls back to the verified in-package bootstrap automatically.
+  - Continues the assessment on the trusted bootstrap set and notes the fallback
+    (`fell_back_to_bootstrap`) so freshness/coverage can be judged accordingly.
+prohibit:
+  - Reasoning over the unverified active snapshot's entries as conclusion-driving.
+  - Aborting the assessment because the refreshed snapshot failed to verify (the
+    signed bootstrap is always a safe floor).
+notes: >
+  H4 resilient bundled fallback (THREAT_MODEL.md §4/§5). When the root is auto-resolved
+  and the active snapshot fails verification, `open_verified` retries against the
+  in-package bootstrap and, if that verifies, returns the bootstrap entries with a
+  `fell_back_to_bootstrap` marker and a warning. A caller that PINS a root explicitly
+  gets the failure reported as-is — the fallback is only for the auto-resolved assessor
+  path. Paired with the pinned-root case that must NOT silently fall back.

@@ -1034,9 +1034,16 @@ single state-advancing path). `install` SHALL: verify an archive bundle's own
 attestation BEFORE extraction (skipped only for an offline install); safe-extract the
 archive (`_pathsafe.safe_extract_tar` — refusing absolute paths, `..` traversal, and
 every non-regular member before writing anything, extracting member-by-member with
-its own IO rather than `tarfile.extractall`); run `verify_download`; on success copy only the
-manifest and declared packs into a staging snapshot, re-verify the staged bytes
-against the attested manifest, atomically rename it into
+its own IO rather than `tarfile.extractall`, and bounding member count and
+per-file/total uncompressed size — re-checked against the bytes actually streamed —
+so a decompression bomb is refused before it can exhaust disk); run `verify_download`;
+on success copy only the manifest and declared packs into a staging snapshot,
+re-verify the staged bytes against the attested manifest, run the **semantic
+pre-install gate** over the staged snapshot (the same `validate_snapshot` +
+consistency + parse-completeness check the Assessor read path uses, scoped to the
+in-package source registry) and refuse without advancing if it fails — so an
+attested-but-invalid snapshot cannot become the high-water mark — then atomically
+rename it into
 `~/.attestarc/knowledge/snapshots/vN`, and atomically advance client state
 (`highest_version`, `current`, `history`, and — whenever `version` reaches a new high —
 `highest_manifest_sha256`, the forward-only chain head the next release's `prev_digest`
@@ -1056,8 +1063,12 @@ attestation-verifies the revocation record against the anchor (an unattested,
 unreadable, or malformed record is discarded and client state left untouched),
 structurally validates its `revoked_versions` (a non-empty list of positive
 integers — the shape the release workflow emits), records the revoked version(s), and rolls `current` back to the most recent retained
-non-revoked snapshot still on disk (or to the in-package bootstrap when none
-remains), marking findings assessed under it `requires_reverification`. It SHALL NOT
+non-revoked snapshot still on disk — **re-verifying that rollback target** (its path
+exists, its on-disk manifest digest still matches the digest recorded in history,
+its packs pass integrity, and it passes the semantic gate) before adopting it, and
+skipping to the next-older verifiable snapshot (or to the in-package bootstrap when
+none verify) — so a tampered or missing retained snapshot is never silently
+reinstated, marking findings assessed under it `requires_reverification`. It SHALL NOT
 lower `highest_version` or `highest_manifest_sha256`, so the forward chain head is
 preserved and an in-order release after a revocation still chains and installs. The
 internal `_apply_revocation` (which trusts its caller) SHALL have no public entry point.
@@ -1067,14 +1078,20 @@ conformance. Before a snapshot is trusted for reasoning it SHALL additionally pa
 `validate_snapshot`: every entry schema-valid; every source's declared
 `publisher`/`type`/`authority` matching the source registry's reclassification of
 its URL (never the value written in the pack); every source URL registry-allowed;
-and no entry carrying a secret-looking value. This gate SHALL run both at install
-time (`install.py verify_bundled_knowledge`) and on the Assessor read path
-(`open_verified`); a violation SHALL withhold trust (route to `needs_review`) and,
-at install time, refuse the snapshot. A pack that only partially parses
+and no entry carrying a secret-looking value. This gate SHALL run at install time —
+both when refreshing an attested bundle (`knowledge_verify.install`, before advancing
+the high-water mark) and for the shipped bootstrap (`install.py
+verify_bundled_knowledge`) — and on the Assessor read path (`open_verified`); a
+violation SHALL withhold trust (route to `needs_review`) and, at install time, refuse
+the snapshot. A pack that only partially parses
 (`parse_partial`) SHALL make the whole set inconsistent (fail closed), never reasoned
 over line-by-line. A read that deliberately skips the verify-gate
 (`--allow-unverified`, tooling only) SHALL surface facts with `drives_conclusion`
-forced false.
+forced false. On the Assessor read path, when the root is auto-resolved (not pinned by
+the caller) and the dynamically-resolved active snapshot fails verification,
+`open_verified` SHALL fall back to the verified in-package bootstrap (marking
+`fell_back_to_bootstrap`) rather than returning an untrusted set or aborting; a
+caller that pins a root explicitly SHALL receive the verification failure as-is.
 
 Freshness is a SEPARATE dimension from integrity. `verify_installed` SHALL report
 `fresh` (is the snapshot within its manifest expiry?) independently of `trusted`: an

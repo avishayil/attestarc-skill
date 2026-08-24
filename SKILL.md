@@ -155,8 +155,10 @@ the relevant entry inline as `KE-…`.
   investigation question but MUST NOT close the chain — route to `needs_review`.
 - On any anomaly the runtime is **fail-secure**: a download with no valid
   attestation (or a tampered/rolled-back/frozen one) is **discarded** and the
-  installed last-known-good is retained; expired/unavailable knowledge falls back to
-  the in-package snapshot with a warning; a `disputed` entry downgrades dependent
+  installed last-known-good is retained; expired/unavailable knowledge — or an active
+  refreshed snapshot that no longer verifies at assessment time — falls back to the
+  verified in-package snapshot with a warning (`fell_back_to_bootstrap`) rather than
+  reasoning over an untrusted set; a `disputed` entry downgrades dependent
   conclusions to `needs_review`. Never fetch-then-trust. See `THREAT_MODEL.md` §5.
 - When a finding's conclusion rests on a knowledge fact, record it on the
   finding's `knowledge_dependencies` (`{id, content_hash}` — `content_hash` is
@@ -191,12 +193,16 @@ ingestion" below). The shipped refresh is a narrow **download → verify → ins
 3. **Install** — `install` is the ONLY path that advances client state. It verifies
    an archive bundle's own attestation before extraction (the published `.tar.gz` is
    attested alongside the manifest), safe-extracts it (refusing absolute paths, `..`,
-   and symlink/hardlink members), re-runs verification, re-verifies the staged bytes,
-   atomically renames the snapshot into `~/.attestarc/knowledge/snapshots/vN`, then
-   atomically records the new version+digest in client state — so the assessor's
-   `verify` trusts it thereafter. Client state and snapshot material live in separate
-   directories; a corrupt (not merely absent) client-state file fails closed and
-   `install` refuses to advance until an explicit reinit.
+   and symlink/hardlink members, and refusing a decompression bomb via member-count
+   and per-file/total uncompressed-size caps), re-runs verification, re-verifies the
+   staged bytes, runs the **same semantic gate the assessor uses**
+   (`validate_snapshot` + consistency + parse-completeness) so an attested-but-invalid
+   snapshot never advances the high-water mark, atomically renames the snapshot into
+   `~/.attestarc/knowledge/snapshots/vN`, then atomically records the new
+   version+digest in client state — so the assessor's `verify` trusts it thereafter.
+   Client state and snapshot material live in separate directories; a corrupt (not
+   merely absent) client-state file fails closed and `install` refuses to advance
+   until an explicit reinit.
 
    ```bash
    python "$ATTESTARC/scripts/knowledge_verify.py" install "$DOWNLOAD_DIR"   # dir or .tar.gz
@@ -205,8 +211,11 @@ ingestion" below). The shipped refresh is a narrow **download → verify → ins
 To retire a compromised version, the Updater applies an **attested revocation** —
 the only public revocation path. It verifies the record against the anchor exactly
 like a bundle, records the revoked version(s), and rolls the active snapshot back to
-the most recent retained non-revoked one (findings assessed under it then surface
-`requires_reverification`):
+the most recent retained non-revoked one — **re-verifying that rollback target**
+(integrity + recorded-digest match + semantic gate) before adopting it, skipping to
+the next-older verifiable snapshot, or the in-package bootstrap if none verify, so a
+tampered retained snapshot is never silently reinstated (findings assessed under it
+then surface `requires_reverification`):
 
 ```bash
 python "$ATTESTARC/scripts/knowledge_verify.py" verify-and-apply-revocation "$REVOCATION_JSON"

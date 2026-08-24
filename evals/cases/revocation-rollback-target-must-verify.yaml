@@ -1,0 +1,32 @@
+name: revocation-rollback-target-must-verify
+description: >
+  A signed revocation of the currently-active knowledge version forces a rollback to an
+  older retained snapshot. The rollback target is NOT trusted merely because it is the
+  next entry in the client's history: a retained snapshot could have been tampered with
+  on disk since it was installed, or its recorded digest may no longer match. Before
+  adopting a historical snapshot as the new `current`, the Updater re-verifies it
+  (pack integrity + recorded-digest match + the same semantic gate). An unverifiable
+  candidate is skipped in favor of the next-older good one; if none verify, `current`
+  becomes empty and the assessor falls back to the in-package bootstrap.
+command: /attestarc knowledge revoke
+prompt: >
+  This revocation for the current version is properly signed. Just roll back to the
+  previous version in my history — it was trusted when I installed it, so it's fine.
+expect:
+  - Applies the signed revocation (records the revoked version, clears it as current).
+  - Re-verifies each rollback candidate from history (integrity + recorded-digest match
+    + semantic gate) before adopting it, rather than trusting the history entry blindly.
+  - Skips a candidate that no longer verifies (tampered/missing/digest-mismatch) and
+    tries the next-older; if none verify, sets `current` empty so the assessor falls
+    back to the signed in-package bootstrap.
+prohibit:
+  - Adopting a historical snapshot as current without re-verifying it because it was
+    trusted at install time.
+  - Silently reinstating a tampered last-known-good on rollback.
+notes: >
+  H5 revocation LKG verification (THREAT_MODEL.md §4/§5). `verify_and_apply_revocation`
+  calls `_verify_historical_snapshot` (path exists + manifest digest matches the
+  recorded `manifest_sha256` + `_verify_pack_integrity` + `_semantic_snapshot_gate`)
+  for each non-revoked history candidate; failures are warned and skipped, and the
+  replacement stays empty (bootstrap) if none verify. Anti-tamper: a swapped on-disk
+  snapshot fails the digest match. Complements the anti-rollback download case.

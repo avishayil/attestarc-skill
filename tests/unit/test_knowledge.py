@@ -367,6 +367,38 @@ def test_open_verified_invalid_provenance_is_inconsistent(tmp_path, knowledge_di
     assert all(e.get("_untrusted") for e in entries)
 
 
+def test_open_verified_falls_back_to_bootstrap_when_dynamic_snapshot_fails(
+        tmp_path, monkeypatch):
+    """H4: with no pinned root, ``open_verified`` resolves the active snapshot
+    dynamically. If that refreshed LKG fails verification (untrusted, non-package),
+    the read path falls back to the verified in-package bootstrap rather than
+    handing the assessor an untrusted set — the documented last-known-good floor."""
+    bad = str(tmp_path / "snapshots" / "vX")
+    _write_pack(bad, "p.jsonl", [_entry(id="KE-a")])  # non-package, unattested
+    with open(os.path.join(bad, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump({"version": 99}, fh)
+    monkeypatch.setattr(knowledge, "resolve_active_snapshot", lambda: bad)
+    entries, verification, consistency = knowledge.open_verified()
+    assert verification.get("fell_back_to_bootstrap") is True
+    assert verification["trusted"] is True
+    assert any("fell back to the in-package bootstrap" in w
+               for w in verification.get("warnings", []))
+    # the returned entries are the trusted bootstrap set, not the bad LKG's KE-a
+    assert all(not e.get("_untrusted") for e in entries)
+    assert "KE-a" not in {e["id"] for e in entries}
+
+
+def test_open_verified_pinned_root_does_not_fall_back(tmp_path):
+    """The fallback is only for the auto-resolved path: when a caller PINS a root
+    explicitly (e.g. a compiler/test inspecting a specific snapshot), a failed
+    verification must be reported as-is, never silently swapped for the bootstrap."""
+    root = str(tmp_path)
+    _write_pack(root, "p.jsonl", [_entry(id="KE-a")])
+    _, verification, _ = knowledge.open_verified(root)
+    assert verification["trusted"] is False
+    assert verification.get("fell_back_to_bootstrap") is not True
+
+
 # --------------------------------------------------------------------------- #
 # Freshness dimension (Workstream WS6): a stale snapshot must not let a down-gate
 # fact suppress a finding, but a risk-increasing fact may still drive.

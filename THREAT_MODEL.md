@@ -180,13 +180,25 @@ installed is closed). `install`:
    (symlink/hardlink/device/fifo) *before* writing anything, and extracting
    member-by-member with our own IO (never `tarfile.extractall`) so a malicious
    archive can neither escape staging nor plant a link a later member follows out of
-   it. (The archive pre-check is skipped only for an offline install, where the
-   manifest attestation + pack integrity still gate the result.)
+   it. The extractor also bounds member count and per-file/total uncompressed size
+   (re-checked against the bytes actually streamed, so a header that under-declares its
+   size cannot slip past), so a decompression bomb is refused before it can exhaust
+   disk — defense-in-depth for this offline extract-before-attest step. (The archive
+   pre-check is skipped only for an offline install, where the manifest attestation +
+   pack integrity still gate the result.)
 2. Run `verify_download` (attestation + integrity + freshness + rollback +
    `prev_digest` chain + revocation). Any failure → `discard`, nothing installed.
 3. Copy **only** the manifest and the declared packs into `snapshots/vN.tmp`,
-   re-verify the *staged* bytes against the (attested) manifest, then `os.replace`
-   into `snapshots/vN` — the install is atomic.
+   re-verify the *staged* bytes against the (attested) manifest, then run a
+   **semantic pre-install gate** over the staged snapshot — the *same*
+   `validate_snapshot` + `check_consistency` + parse-completeness checks the Assessor
+   read path uses, scoped to the in-package source registry — and refuse (discard the
+   staged copy, do not advance) if it fails. Attestation proves origin, not that the
+   content obeys the trust contract; without this gate an attested-but-invalid bundle
+   could advance the high-water mark to a version the Assessor can never actually read
+   (a durable availability hole). Only once the staged snapshot both hash-matches and
+   passes the semantic gate is it `os.replace`d into `snapshots/vN` — the install is
+   atomic.
 4. Advance client state in a single atomic write: `highest_version`, `current`
    (`{version, manifest_sha256, verified_via, path}`), `history`, and — whenever
    `version` reaches a new high — `highest_manifest_sha256`, the **high-water chain
@@ -195,7 +207,14 @@ installed is closed). `install`:
 The `prev_digest` chain is checked against that **high-water head, not the active
 `current` snapshot**. A revocation may roll `current` back to an older last-known-good,
 but it never lowers `highest_version` or the chain head, so `v4 → v5 → revoke(v5) → v6`
-still installs (v6 chains to the v5 head). Once anything is installed (floor > 0) a
+still installs (v6 chains to the v5 head). The rollback target is **not trusted merely
+for being the next history entry**: before a historical snapshot is adopted as
+`current`, it is re-verified (its path exists, its on-disk manifest digest still matches
+the digest recorded in history — an anti-tamper check — its packs pass integrity, and it
+passes the same semantic gate). A candidate that no longer verifies is skipped for the
+next-older good one; if none verify, `current` is left empty so the Assessor falls back
+to the in-package bootstrap. A tampered retained snapshot is therefore never silently
+reinstated on rollback. Once anything is installed (floor > 0) a
 downloaded manifest **must** carry a `prev_digest` equal to the head — a missing chain
 link is fail-closed (`discard`), not silently treated as a first install. Only a genuine
 first install (floor 0) may omit it. (Client state written before this field existed is
@@ -286,6 +305,9 @@ The runtime NEVER fetches-then-trusts. On any anomaly it degrades safely:
 | Revocation rolled `current` back to an older LKG | The high-water chain head is preserved (revocation never lowers `highest_version`), so the next in-order release still chains and installs |
 | Downloaded bundle presents `mode: bootstrap` | **Reject** — bootstrap is valid ONLY for the in-package snapshot |
 | Downloaded archive contains an unsafe member (absolute path, `..`, symlink/hardlink/device) | **Refuse** the whole extract before writing anything; nothing is installed |
+| Downloaded archive is a decompression bomb (too many members, or a member/total uncompressed size over the cap) | **Refuse** the extract before writing anything (member-count + per-file + total caps, re-checked against actual bytes streamed so a lying header cannot slip past); nothing is installed |
+| Rollback target (retained LKG) fails re-verification (missing, tampered, or recorded-digest mismatch) | **Skip** it for the next-older verifiable snapshot; if none verify, leave `current` empty so the Assessor falls back to the in-package bootstrap |
+| Active (refreshed) snapshot fails verification at assessment time | Assessor **falls back to the verified in-package bootstrap** (the signed last-known-good floor) and continues, marking `fell_back_to_bootstrap`; it neither reasons over the untrusted set nor aborts the assessment |
 | Client state present but corrupt/unparseable (rollback memory lost) | Mark `_corrupt` and **refuse** to advance state (`install`/revocation); Assessor falls back to the in-package bootstrap until explicit reinit |
 | Installed knowledge expired (stale/frozen) | Warn; snapshot stays trusted as the last-known-good floor, but a **stale down-gate** fact (`effect: mitigation`/`neutral`) no longer drives a conclusion (route to `needs_review`) — only `effect: risk-increasing` facts keep driving (failing toward scrutiny) |
 | Snapshot violates its own trust contract (schema / provenance-vs-registry / secret) | `validate_snapshot` withholds trust → set untrusted (`needs_review`); refused at install time |

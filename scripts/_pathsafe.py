@@ -78,7 +78,20 @@ def safe_read_text(path: str, root: str, encoding: str = "utf-8") -> str:
         return fh.read()
 
 
-def safe_extract_tar(tar_path: str, dest_dir: str) -> list[str]:
+# Resource limits for untrusted-archive extraction (defense-in-depth against a
+# decompression bomb: a small .tar.gz can declare enormous or innumerable members).
+# These bound what an OFFLINE extract-before-attest can cost before the attestation
+# gate would reject the bytes anyway. Generous relative to a real knowledge bundle
+# (a handful of small JSONL packs + a manifest), tight relative to an abuse case.
+_MAX_TAR_MEMBERS = 10_000
+_MAX_TAR_FILE_BYTES = 50 * 1024 * 1024        # 50 MiB per member
+_MAX_TAR_TOTAL_BYTES = 200 * 1024 * 1024      # 200 MiB uncompressed total
+
+
+def safe_extract_tar(tar_path: str, dest_dir: str,
+                     max_members: int = _MAX_TAR_MEMBERS,
+                     max_file_bytes: int = _MAX_TAR_FILE_BYTES,
+                     max_total_bytes: int = _MAX_TAR_TOTAL_BYTES) -> list[str]:
     """Extract a tar archive into ``dest_dir``, refusing every unsafe member.
 
     A downloaded knowledge bundle is untrusted supply-chain input. Each member
@@ -90,16 +103,26 @@ def safe_extract_tar(tar_path: str, dest_dir: str) -> list[str]:
     own IO (never :meth:`tarfile.extractall`), so tarfile's own path handling is
     not on the trust path.
 
+    Resource limits bound a decompression bomb: the member count, each member's
+    declared uncompressed size, and the total uncompressed size are all checked in
+    the first (validate-only) pass, so an oversized or over-populated archive is
+    refused *before anything is written*. The declared sizes are the tar headers;
+    the second pass copies with our own IO and never trusts a header past this gate.
+
     Raises :class:`PathEscapeError` (containment) or :class:`ValueError` (unsafe
-    member kind / unreadable) on any violation; otherwise returns the list of
-    extracted file paths relative to ``dest_dir``.
+    member kind / unreadable / exceeds a resource limit) on any violation;
+    otherwise returns the list of extracted file paths relative to ``dest_dir``.
     """
     dest_real = os.path.normpath(os.path.realpath(dest_dir))
     os.makedirs(dest_real, exist_ok=True)
     written: list[str] = []
     with tarfile.open(tar_path, "r:*") as tf:
         members = tf.getmembers()
+        if len(members) > max_members:
+            raise ValueError(
+                f"tar has {len(members)} members, exceeding the {max_members} cap")
         # First pass: validate every member. Nothing is written until all pass.
+        total_bytes = 0
         for m in members:
             name = m.name
             if os.path.isabs(name) or name.startswith(("/", "\\")):
@@ -107,11 +130,25 @@ def safe_extract_tar(tar_path: str, dest_dir: str) -> list[str]:
             if not (m.isfile() or m.isdir()):
                 raise ValueError(
                     f"unsafe tar member (not a regular file or directory): {name!r}")
+            if m.isfile():
+                if m.size > max_file_bytes:
+                    raise ValueError(
+                        f"tar member {name!r} is {m.size} bytes, exceeding the "
+                        f"{max_file_bytes}-byte per-file cap")
+                total_bytes += m.size
+                if total_bytes > max_total_bytes:
+                    raise ValueError(
+                        f"tar uncompressed size exceeds the {max_total_bytes}-byte "
+                        "total cap")
             resolved, root_real, within = resolve_within_root(
                 os.path.join(dest_real, name), dest_real)
             if not within:
                 raise PathEscapeError(name, resolved, root_real)
-        # Second pass: extract with our own IO now that all members are safe.
+        # Second pass: extract with our own IO now that all members are safe. We
+        # still enforce the total cap against the ACTUAL bytes read, not the tar
+        # header, so a member whose header under-declares its size (streaming more
+        # than advertised) cannot slip past the first-pass gate.
+        extracted_total = 0
         for m in members:
             resolved, _, _ = resolve_within_root(
                 os.path.join(dest_real, m.name), dest_real)
@@ -122,7 +159,20 @@ def safe_extract_tar(tar_path: str, dest_dir: str) -> list[str]:
             src = tf.extractfile(m)
             if src is None:
                 raise ValueError(f"unreadable tar member: {m.name!r}")
+            written_bytes = 0
             with src, open(resolved, "wb") as out:
-                shutil.copyfileobj(src, out)
+                while True:
+                    chunk = src.read(65536)
+                    if not chunk:
+                        break
+                    written_bytes += len(chunk)
+                    extracted_total += len(chunk)
+                    if written_bytes > max_file_bytes or extracted_total > max_total_bytes:
+                        out.close()
+                        os.remove(resolved)
+                        raise ValueError(
+                            f"tar member {m.name!r} streamed more than its declared "
+                            "size, exceeding a resource cap")
+                    out.write(chunk)
             written.append(os.path.relpath(resolved, dest_real))
     return written

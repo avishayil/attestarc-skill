@@ -41,7 +41,15 @@ def _make_root(tmp_path, version=2, expires="2099-01-01T00:00:00Z",
     Returns (root_dir, manifest_sha256)."""
     root = str(tmp_path / "kroot")
     os.makedirs(root, exist_ok=True)
-    packs = packs or {"bootstrap/a.jsonl": b'{"id":"KE-a"}\n'}
+    # A semantically-valid entry (schema-valid, source authority matching the
+    # package registry's classification of docs.github.com): install now runs the
+    # same semantic gate the assessor read path uses, so a bundle must pass it.
+    packs = packs or {"bootstrap/a.jsonl": (
+        b'{"id":"KE-a","kind":"platform-semantics","platform":"github-actions",'
+        b'"subject":"cache-write","claim":"cache writes are ref-scoped",'
+        b'"valid_from":"2026-01-01","status":"active","confidence":"authoritative",'
+        b'"sources":[{"publisher":"GitHub","authority":100,"type":"vendor-docs",'
+        b'"url":"https://docs.github.com/x"}]}\n')}
     pack_meta = []
     for name, data in packs.items():
         _write_pack(root, name, data)
@@ -311,6 +319,28 @@ def test_install_advances_state_and_writes_snapshot(tmp_path, monkeypatch):
     assert reloaded["current"]["verified_via"] == "attestation"
 
 
+def test_install_refuses_semantically_invalid_attested_snapshot(tmp_path, monkeypatch):
+    """H3: a bundle can carry a valid attestation and intact pack integrity yet still
+    be semantically broken (schema-invalid entry, unresolvable source authority). The
+    pre-install gate runs the same validate/consistency/parse-completeness check the
+    assessor read path uses, so install refuses to advance high-water — no durable
+    availability hole from an attested-but-invalid snapshot."""
+    # A schema-invalid entry (missing required fields) with a manifest that matches it,
+    # so pack integrity passes but the semantic gate must reject it.
+    bad = b'{"id":"KE-bad","kind":"platform-semantics"}\n'
+    root, _ = _make_root(tmp_path, version=8, packs={"bootstrap/a.jsonl": bad})
+    monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
+    anchor = _anchor(tmp_path)
+    anchor["snapshots_dir"] = str(tmp_path / "snaps")
+    result = kv.install(root, anchor=anchor,
+                        client_state={"highest_version": 0, "current": None,
+                                      "revoked_versions": [], "history": []})
+    assert result["trusted"] is not True
+    assert result["action"] == "discard"
+    # state never advanced
+    assert kv.load_client_state(anchor)["highest_version"] == 0
+
+
 def test_install_refuses_on_corrupt_state(tmp_path, monkeypatch):
     root, _ = _make_root(tmp_path, version=8)
     monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
@@ -407,12 +437,13 @@ def test_revocation_applies_and_rolls_back_current(tmp_path, monkeypatch):
     monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
     rec = _write_revocation(tmp_path, [5])
     anchor = _anchor(tmp_path)
-    v4 = str(tmp_path / "snaps" / "v4")
-    os.makedirs(v4, exist_ok=True)
+    # H5: the rollback target must actually verify (integrity + semantic gate +
+    # recorded-digest match) before it is adopted, so build a real valid v4.
+    v4, d4 = _make_root(tmp_path / "v4build", version=4)
     state = {"highest_version": 5, "revoked_versions": [],
              "current": {"version": 5, "manifest_sha256": "d5",
                          "verified_via": "attestation", "path": str(tmp_path / "v5")},
-             "history": [{"version": 4, "manifest_sha256": "d4", "path": v4},
+             "history": [{"version": 4, "manifest_sha256": d4, "path": v4},
                          {"version": 5, "manifest_sha256": "d5",
                           "path": str(tmp_path / "v5")}]}
     result = kv.verify_and_apply_revocation(rec, anchor=anchor, client_state=state)
@@ -421,6 +452,48 @@ def test_revocation_applies_and_rolls_back_current(tmp_path, monkeypatch):
     reloaded = kv.load_client_state(anchor)
     assert 5 in reloaded["revoked_versions"]
     assert reloaded["current"]["version"] == 4  # rolled back to retained LKG
+    assert reloaded["current"]["path"] == v4
+
+
+def test_revocation_skips_unverifiable_lkg_to_bootstrap(tmp_path, monkeypatch):
+    """H5: a retained rollback candidate that no longer verifies (missing/corrupt on
+    disk, or a digest that no longer matches the recorded one) is SKIPPED. With no
+    older good snapshot, ``current`` becomes None so the assessor falls back to the
+    in-package bootstrap — a tampered LKG is never silently reinstated."""
+    monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
+    rec = _write_revocation(tmp_path, [5])
+    anchor = _anchor(tmp_path)
+    v4 = str(tmp_path / "snaps" / "v4")
+    os.makedirs(v4, exist_ok=True)  # empty dir: no manifest, fails verification
+    state = {"highest_version": 5, "revoked_versions": [],
+             "current": {"version": 5, "manifest_sha256": "d5",
+                         "verified_via": "attestation", "path": str(tmp_path / "v5")},
+             "history": [{"version": 4, "manifest_sha256": "d4", "path": v4},
+                         {"version": 5, "manifest_sha256": "d5",
+                          "path": str(tmp_path / "v5")}]}
+    result = kv.verify_and_apply_revocation(rec, anchor=anchor, client_state=state)
+    assert result["applied"] is True and result["rolled_back_from"] == 5
+    reloaded = kv.load_client_state(anchor)
+    assert reloaded["current"] is None  # bootstrap fallback, not the unverifiable v4
+
+
+def test_revocation_skips_lkg_with_mismatched_recorded_digest(tmp_path, monkeypatch):
+    """H5 anti-tamper: a retained snapshot whose on-disk manifest digest no longer
+    matches the digest recorded in history is skipped (it was swapped since install)."""
+    monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
+    rec = _write_revocation(tmp_path, [5])
+    anchor = _anchor(tmp_path)
+    v4, real_d4 = _make_root(tmp_path / "v4build", version=4)
+    state = {"highest_version": 5, "revoked_versions": [],
+             "current": {"version": 5, "manifest_sha256": "d5",
+                         "verified_via": "attestation", "path": str(tmp_path / "v5")},
+             # record a DIFFERENT digest than what is on disk
+             "history": [{"version": 4, "manifest_sha256": "not-" + real_d4,
+                          "path": v4}]}
+    result = kv.verify_and_apply_revocation(rec, anchor=anchor, client_state=state)
+    assert result["applied"] is True
+    reloaded = kv.load_client_state(anchor)
+    assert reloaded["current"] is None
 
 
 # --------------------------------------------------------------------------- #

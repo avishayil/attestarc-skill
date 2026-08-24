@@ -244,9 +244,12 @@
           never verify while state is left half-advanced. It <strong>verifies the archive's own
           attestation before extracting it</strong>, then <strong>safe-extracts</strong> the archive
           (refusing absolute paths, <code>..</code>, and symlink/hardlink members <em>before</em> writing
-          anything, and extracting member-by-member rather than <code>extractall</code>), re-verifies the
-          staged bytes, atomically renames the snapshot into place, and only then atomically advances client
-          state. Rollback memory (<code>~/.attestarc/state/</code>) and installed snapshots
+          anything, extracting member-by-member rather than <code>extractall</code>, and bounding member
+          count and per-file/total uncompressed size — re-checked against the bytes actually streamed — so a
+          decompression bomb is refused before it can exhaust disk), re-verifies the staged bytes, runs the
+          <strong>same semantic gate the assessor uses</strong> (<code>validate_snapshot</code> + consistency
+          + parse-completeness) so an attested-but-invalid snapshot can never advance the high-water mark,
+          atomically renames the snapshot into place, and only then atomically advances client state. Rollback memory (<code>~/.attestarc/state/</code>) and installed snapshots
           (<code>~/.attestarc/knowledge/snapshots/</code>) live in separate directories, and a
           <em>corrupt</em> — not merely absent — client-state file fails closed: the Updater refuses to
           advance and the assessor falls back to the in-package snapshot until an explicit reinit. The
@@ -293,6 +296,9 @@
               <tr><td>Manifest/pack tampered, rolled back, or frozen (expired)</td><td><strong>Discard</strong> the download; keep the installed last-known-good</td></tr>
               <tr><td>Downloaded bundle presents <code>mode: bootstrap</code></td><td><strong>Reject</strong> — bootstrap is valid only for the in-package snapshot</td></tr>
               <tr><td>Downloaded archive has an unsafe member (absolute path, <code>..</code>, symlink / hardlink / device)</td><td><strong>Refuse</strong> the whole extract before writing anything; nothing is installed</td></tr>
+              <tr><td>Downloaded archive is a decompression bomb (too many members, or over the per-file/total uncompressed cap)</td><td><strong>Refuse</strong> the extract before writing anything (caps re-checked against actual bytes streamed); nothing is installed</td></tr>
+              <tr><td>Rollback target (retained LKG) fails re-verification (missing, tampered, or recorded-digest mismatch)</td><td><strong>Skip</strong> it for the next-older verifiable snapshot; if none verify, fall back to the in-package bootstrap</td></tr>
+              <tr><td>Active (refreshed) snapshot fails verification at assessment time</td><td>Assessor <strong>falls back to the verified in-package bootstrap</strong> and continues (<code>fell_back_to_bootstrap</code>) — never reasons over the untrusted set nor aborts</td></tr>
               <tr><td>Client state present but corrupt (rollback memory lost)</td><td>Mark <code>_corrupt</code> and <strong>refuse</strong> to advance state; assessor falls back to the in-package snapshot until explicit reinit</td></tr>
               <tr><td>Installed knowledge expired (stale / frozen)</td><td>Warn; stays trusted as the last-known-good floor, but a stale down-gate fact (<code>effect: mitigation</code>/<code>neutral</code>) no longer drives a conclusion — only <code>risk-increasing</code> facts keep driving</td></tr>
               <tr><td>Snapshot violates its own trust contract (schema / provenance-vs-registry / secret)</td><td><code>validate_snapshot</code> withholds trust → set untrusted (<code>needs_review</code>); refused at install time</td></tr>
@@ -309,8 +315,10 @@
           knowledge version can be revoked. The single public revocation path
           (<code>verify_and_apply_revocation</code>) attests the revocation record against the anchor exactly
           like a bundle, records the revoked version(s), rolls the active snapshot back to the most recent
-          retained non-revoked one (or the in-package bootstrap when none remains), and marks findings
-          assessed under it <code>requires_reverification</code>. Because the internal caller-trusts-me apply
+          retained non-revoked one — <strong>re-verifying that rollback target</strong> (integrity +
+          recorded-digest match + semantic gate) before adopting it, so a tampered retained snapshot is never
+          silently reinstated, and falling back to the in-package bootstrap when none verify — and marks
+          findings assessed under it <code>requires_reverification</code>. Because the internal caller-trusts-me apply
           has no public entry point, a forged revocation cannot become an attacker's rollback primitive — and
           it <em>re-observes</em> affected findings rather than silently resolving them. This path is designed
           before it is needed.</p>
