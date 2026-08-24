@@ -14,11 +14,14 @@
 # with `gh attestation verify` before publishing — it never publishes something it
 # could not verify (fail-secure, never sign/publish-then-trust).
 #
-# Provenance is bound to REVIEWED source history two ways: (1) an ancestry gate
+# Provenance is bound to REVIEWED source history three ways: (1) an ancestry gate
 # refuses to build unless the triggering commit is contained in origin/main (a tag
-# on an unreviewed commit cannot be signed), and (2) the self-verify + client-side
+# on an unreviewed commit cannot be signed); (2) the self-verify + client-side
 # checks bind the certificate SAN's git ref, not just the workflow path, to the
-# reviewed refs pinned in knowledge/trust-anchor.json.
+# reviewed refs pinned in knowledge/trust-anchor.json; and (3) the release job runs
+# in the `knowledge-release` environment, whose deployment tag policy restricts it to
+# `knowledge-v*` tags. Release tags are immutable (tag-protection ruleset: no
+# force-push/deletion) and required to be signed (knowledge-v* tag ruleset).
 #
 # NOTE: actions/attest-build-provenance is pinned below to v4.2.2
 # (4d101475d8b20a2381f78447822ac1eab6504dd8). The maintainer MUST independently
@@ -52,6 +55,12 @@ jobs:
   build-attest-publish:
     if: ${{ github.event.inputs.revoke_version == '' }}
     runs-on: ubuntu-latest
+    # Protected release environment: its deployment tag policy restricts this job to
+    # `knowledge-v*` tags, so the attest+publish path cannot run from an arbitrary ref
+    # even if the trigger were widened. (Environment REQUIRED-REVIEWER approval is not
+    # set here because a single-maintainer repo cannot self-approve; the ancestry gate
+    # and ref-bound identity are the enforceable controls — THREAT_MODEL.md §4/§6.)
+    environment: knowledge-release
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

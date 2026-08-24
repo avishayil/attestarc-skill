@@ -907,9 +907,12 @@ and process, not merely in prompt text. `THREAT_MODEL.md` is the companion
 rationale.
 
 - **Kernel** (`core/`, `SKILL.md`, the verification/state helpers, `schemas/`, the
-  eval corpus) — highly trusted; changes only through reviewed pull requests, eval-
-  gated, and (for root-of-trust files) two-party reviewed (§22). It MUST NOT be
-  writable by the running skill during an assessment.
+  eval corpus) — highly trusted; changes only through reviewed pull requests into a
+  protected `main`, eval-gated, with third-party Actions SHA-pinned, and (for
+  root-of-trust files) two-party reviewed as policy (§22; the second-approval gate is
+  enforced where a second reviewer is available and is aspirational on a
+  single-maintainer repository — see `THREAT_MODEL.md` §6). It MUST NOT be writable by
+  the running skill during an assessment.
 - **Verified knowledge** (`knowledge/`) — trusted for reasoning only after passing
   the verification chain (§23.3). MAY be refreshed by the Updater, never by the
   Assessor.
@@ -996,7 +999,11 @@ bootstrap-trusted ONLY because it rode in on the attested skill release. Upstrea
 attests **both** `knowledge/manifest.json` (version, expiry, `prev_digest`, per-pack
 `{sha256,size}`) **and** the published `.tar.gz` with GitHub Artifact Attestations;
 it populates `prev_digest` from the immediately-preceding release's manifest and
-only signs a commit contained in `main`'s reviewed history (an ancestry gate).
+only signs a commit contained in `main`'s reviewed history (an ancestry gate). The
+attest+publish job runs in a protected `knowledge-release` environment whose
+deployment policy restricts it to `knowledge-v*` tags, and those tags must be signed
+and are immutable (`knowledge-v*` tag ruleset: `required_signatures` + no
+force-push/deletion).
 `scripts/knowledge_verify.py` provides the verification and lifecycle entry points:
 `verify_download` (Updater; runs `gh attestation verify` against the anchor identity,
 then checks manifest pack integrity, freshness/anti-freeze, monotonic version vs

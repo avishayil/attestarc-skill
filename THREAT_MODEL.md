@@ -46,7 +46,10 @@ The primary rule:
 AttestArc is partitioned into three zones. The kernel/knowledge boundary is
 enforced in **code** (the assessor reads knowledge only through a verify-gate, its
 helpers contain no network code, and the kernel is not writable at assessment time)
-and in **process** (reviewed PRs, two-party review for root-of-trust files). The
+and in **process** (all changes land through reviewed pull requests gated by the
+eval corpus, third-party Actions pinned to a full commit SHA, and — for root-of-trust
+files — two-party review; see §6 for what two-party review means and how it is
+enforced given the repository's reviewer staffing). The
 separation of the *principals* (§3) is **structural and documented**, not an
 in-session sandbox: a host that pre-approves a tool (Claude Code `allowed-tools`,
 Cursor) does not remove it, so AttestArc cannot claim to strip the network from a
@@ -267,6 +270,22 @@ semantic diff → direction → may-promote).
   trusted eval**.
 - **Never auto-promote** — blog / issue / researcher post / model inference →
   candidate only.
+
+**What "two-party review" means, and its enforcement ceiling.** Two-party review is
+the *policy* for every root-of-trust change: a second trusted reviewer approves
+before merge. What the repository *mechanically enforces* today is the enforceable
+floor — every change lands via a pull request into a protected `main` (no direct
+push, no force-push, no deletion, linear history, required status checks), the eval
+corpus gates the change, and third-party Actions are SHA-pinned; the attest+publish
+job runs in a protected `knowledge-release` **environment** whose deployment policy
+restricts it to `knowledge-v*` tags, release tags are immutable and **must be signed**
+(`knowledge-v*` tag ruleset: `required_signatures` + no force-push/deletion), and the
+release identity is ref-bound (§4). On a **single-maintainer** repository GitHub cannot enforce a second *approval*
+(an author may not approve their own PR), so two-party review is applied whenever a
+second reviewer is available rather than blocking every merge — the guarantee is the
+enforceable floor plus this policy, not an unconditional two-approval gate. Adding a
+second maintainer (or a trusted review bot) and raising `required_approving_review_count`
+promotes the policy into a mechanical gate without any code change.
 
 Authority is assigned by the source registry (`knowledge/sources.yaml`), never by
 the model, and URL paths are dot-segment-normalized before prefix matching (a

@@ -49,8 +49,13 @@ The primary rule:
 AttestArc's reasoning corpus is partitioned by trust. The kernel/knowledge
 boundary is enforced in **code** (the assessor reads knowledge only through a
 verify-gate, its helpers contain no network code, the kernel is not writable
-during an assessment) and in **process** (reviewed PRs, two-party review for
-root-of-trust files).
+during an assessment) and in **process** (all changes land via reviewed PRs into a
+protected `main`, gated by the eval corpus and SHA-pinned Actions; the attest+publish
+job is confined to a protected `knowledge-release` environment restricted to
+`knowledge-v*` tags, and release tags must be signed and are immutable; root-of-trust
+files additionally require two-party review — the second-approval gate is enforced
+where a second reviewer is available, and is aspirational on a single-maintainer
+repository, see `THREAT_MODEL.md` §6).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -190,9 +195,10 @@ package.** The trust-critical surfaces, and example concerns for each, are:
   source registry.
 - **Release / attestation** (`.github/workflows/release-knowledge.yml`) — e.g. a
   bundle published without provenance, an attestation minted from an unreviewed ref
-  (the workflow's ancestry gate refuses to sign a tag not contained in `main`, and
-  the anchor binds the certificate's git ref, not just the workflow path), or a
-  rollback/freeze that a client accepts.
+  (the workflow's ancestry gate refuses to sign a tag not contained in `main`, the
+  attest+publish job is confined to a `knowledge-release` environment restricted to
+  signed `knowledge-v*` tags, and the anchor binds the certificate's git ref, not just
+  the workflow path), or a rollback/freeze that a client accepts.
 - **Helper scripts and installer** — e.g. a helper mishandling untrusted
   repository content, a secret value reaching `.attestarc/findings.json`, or the
   installer writing outside the intended skills directory.
