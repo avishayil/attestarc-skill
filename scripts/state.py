@@ -43,7 +43,8 @@ from datetime import datetime, timezone
 from _pathsafe import PathEscapeError, resolve_within_root, safe_read_text
 
 # Bumped to 4 in v0.5.0: optional finding.knowledge_dependencies array
-# ({id, version|content_hash}) recording which verified knowledge entries a
+# ({id, content_hash [, version]}, content_hash required) recording which
+# verified knowledge entries a
 # conclusion rests on; requires_reverification is a read-time computed view
 # (never a stored field). Version 3 (v0.4.0) added finding.type taxonomy, the
 # risk_acceptance nested object with expires_at, typed related_findings, and
@@ -568,7 +569,7 @@ def _validate_knowledge_dependencies(deps, where: str, err) -> None:
     for j, item in enumerate(deps):
         at = f"{where}.knowledge_dependencies[{j}]"
         if not isinstance(item, dict):
-            err(f"{at} must be an object {{id, version|content_hash}}")
+            err(f"{at} must be an object {{id, content_hash}}")
             continue
         for key in item:
             if key not in _KNOWLEDGE_DEP_KEYS:
@@ -576,6 +577,10 @@ def _validate_knowledge_dependencies(deps, where: str, err) -> None:
         kid = item.get("id")
         if not isinstance(kid, str) or not kid:
             err(f"{at}.id must be a non-empty string")
+        ch = item.get("content_hash")
+        if not isinstance(ch, str) or not ch:
+            err(f"{at}.content_hash is required (an id alone cannot reliably "
+                f"invalidate a finding)")
 
 
 def _validate_risk_acceptance(ra, where: str, err) -> None:

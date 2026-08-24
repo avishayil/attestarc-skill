@@ -25,6 +25,10 @@
       "type": "string",
       "description": "Short topic slug the claim is about, e.g. pull_request_target, cache-write, oidc-subject. Used by knowledge.py lookup --subject."
     },
+    "claim_key": {
+      "type": "string",
+      "description": "Optional single-valued slot key for contradiction detection. Two active entries that share a claim_key and an overlapping applies_to but assert different claims are a contradiction (routes to needs_review). Use only for genuinely single-valued platform defaults, not for complementary facts about the same subject."
+    },
     "claim": {
       "type": "string",
       "description": "The fact, stated plainly and testably. NOT a verdict about any repository. Contains no secret values."
@@ -100,9 +104,9 @@
     },
     "source": {
       "type": "object",
-      "required": ["publisher", "authority", "type", "url"],
+      "required": ["publisher", "authority", "type", "url", "retrieved_at"],
       "additionalProperties": false,
-      "description": "One provenance record. 'authority' comes from the source registry (knowledge/sources.yaml), never chosen by the model.",
+      "description": "One provenance record. 'publisher'/'authority'/'type' are DERIVED from the URL via the source registry (knowledge/sources.yaml), never chosen by the model, and 'retrieved_at' is always required as the temporal anchor. Pipeline-derived candidates are additionally bound to a fetched object — content_hash + retrieved_at, or a receipt_id resolving to a quarantine receipt — enforced by knowledge_compile.validate_candidate. In the in-package bootstrap snapshot a source's integrity rests instead on the attested pack hash in manifest.json.",
       "properties": {
         "publisher": { "type": "string", "description": "Who published it, e.g. GitHub, SLSA, OpenSSF." },
         "authority": {
@@ -117,8 +121,9 @@
           "description": "Source class; maps to an authority tier in the registry."
         },
         "url": { "type": "string" },
-        "retrieved_at": { "type": "string", "format": "date" },
+        "retrieved_at": { "type": "string", "description": "When the source content was fetched (ISO 8601 date or date-time)." },
         "content_hash": { "type": "string", "description": "Hash of the fetched source content at retrieval time." },
+        "receipt_id": { "type": "string", "description": "Id of a quarantine receipt (knowledge_compile.py) that carries the derived provenance for this source." },
         "extensions": { "$ref": "#/definitions/extensions" }
       }
     }

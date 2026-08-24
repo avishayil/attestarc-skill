@@ -316,9 +316,9 @@
     },
     "knowledge_dependency": {
       "type": "object",
-      "required": ["id"],
+      "required": ["id", "content_hash"],
       "additionalProperties": false,
-      "description": "A pin to a verified knowledge entry (schemas/knowledge.schema.json) that this finding's conclusion depends on. At least one of version or content_hash SHOULD be recorded so a later change can be detected; when the pinned entry is superseded or its version/content_hash no longer matches, the finding surfaces requires_reverification (a read-time computed view) and must be re-observed. A knowledge change never auto-resolves a finding.",
+      "description": "A pin to a verified knowledge entry (schemas/knowledge.schema.json) that this finding's conclusion depends on. content_hash is REQUIRED: an id alone cannot reliably invalidate a finding (the claim can be edited without the id changing). When the pinned entry is superseded or its content_hash no longer matches, the finding surfaces requires_reverification (a read-time computed view) and must be re-observed. A knowledge change never auto-resolves a finding.",
       "properties": {
         "id": {
           "type": "string",

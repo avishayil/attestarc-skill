@@ -130,7 +130,7 @@ def test_knowledge_dependency_definition(schemas_dir):
     schema = _load_schema(schemas_dir)
     dep = schema["definitions"]["knowledge_dependency"]
     assert dep["additionalProperties"] is False
-    assert dep["required"] == ["id"]
+    assert dep["required"] == ["id", "content_hash"]
     assert set(dep["properties"].keys()) == {"id", "version", "content_hash"}
     # findings reference it as an optional array on the finding.
     assert schema["definitions"]["finding"]["properties"][
