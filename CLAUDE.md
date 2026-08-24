@@ -11,6 +11,15 @@ implementation to them, and update them in the same change set whenever behavior
 the findings/knowledge schemas, script contracts, trust boundaries, scope, or
 conformance criteria change.
 
+The security model also has a **public transparency layer** that MUST NOT drift from
+the code it describes: `SECURITY.md` (the public summary, which feeds the GitHub
+Security tab) and `docs/security.html` (the visual overview on the project site).
+`THREAT_MODEL.md` is authoritative; the other two mirror it. Any change to behavior,
+the trust boundary, the findings/knowledge schemas, script contracts, or scope MUST
+update — in the same change set — `SECURITY.md`, `THREAT_MODEL.md`, `SPECIFICATION.md`,
+and `docs/security.html`. A docs-only drift (public text describing a trust property
+the code no longer has, or vice versa) is a review-blocking defect, not a follow-up.
+
 Do not design it as a standalone security application.
 
 Do not introduce agent frameworks, servers, databases, dashboards, report
