@@ -383,18 +383,38 @@ semantic diff → direction → may-promote).
   safe-extract helper the install path trusts against untrusted archives),
   `scripts/okf.py` (the OKF concept serializer/parser — a parser differential here
   would let two readers disagree on a signed byte stream),
+  `scripts/computations/attester.py` (the structural receipt validator that models
+  the fact-emitting Helpers as OKF *Attested Computation* concepts — see the
+  trust-zone note below),
   `knowledge/sources.yaml`,
   `knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json` (including the
   candidate schema), `schemas/okf-concept.schema.json`,
+  `schemas/okf-computation.schema.json`,
   `schemas/learning-candidate.schema.json`,
   `schemas/eval-result.schema.json`, anything under `knowledge/promotions/` (the
-  per-entry promotion decisions and the bootstrap approval),
+  per-entry promotion decisions and the bootstrap approval) or
+  `scripts/computations/` (the Attested-Computation concept tree),
   `bootstrap-anchor.json` (the package-distribution root of trust),
   `.github/workflows/release-knowledge.yml`, `.github/workflows/release-skill.yml`
   (attests the distributed package tarball), or **any weakening/deletion of a
   trusted eval**.
 - **Never auto-promote** — blog / issue / researcher post / model inference →
   candidate only.
+
+**Trust-zone note — Attested-Computation modeling is not the knowledge plane.**
+`scripts/computations/` models the deterministic fact-emitting Helpers
+(`discover_repo.py`, `inspect_workflows.py`, `inspect_git_diff.py`) as OKF *Attested
+Computation* concepts, but it is a **different trust zone** from the verified-knowledge
+plane. Because these concepts describe **kernel scripts**, they are root-of-trust
+(two-party review, above) and are **never** knowledge-attested as volatile facts — they
+MUST NOT live under `knowledge/bootstrap/` and are not loaded by `load_packs`. The
+load-bearing invariant is `emits: facts`: `attester.py` is a **structural receipt
+validator only** — it checks that a receipt a Helper emitted has the declared shape and
+carries no verdict-shaped key (`verdict`/`finding`/`severity`/… — the facts-not-verdicts
+layer boundary restated as data), and it emits that structural fact and nothing else. It
+never runs a Helper, never touches the assessed repository or the network, and never
+emits a security verdict; a verdict emitter here would violate the layer boundary
+(SPECIFICATION.md §2.6/§12.5/§17). Like every Helper it degrades rather than crashes.
 
 **What "two-party review" means, and its enforcement ceiling.** Two-party review is
 the *policy* for every root-of-trust change: a second trusted reviewer approves

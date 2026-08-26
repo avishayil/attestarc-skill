@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://attestarc.dev/schemas/okf-computation.schema.json",
+  "title": "OKF Attested-Computation concept (on-disk shape)",
+  "description": "Documents the frontmatter shape of an AttestArc OKF 'Attested Computation' concept under scripts/computations/*.md. These concepts MODEL the kernel's deterministic, fact-emitting helper scripts (discover_repo.py, inspect_workflows.py, inspect_git_diff.py) as data. They are a DIFFERENT trust zone from the knowledge plane: they describe kernel scripts, are root-of-trust, are NEVER knowledge-attested as volatile facts, and MUST NOT live under knowledge/bootstrap/. Everything trust-relevant lives under the 'attestarc' namespace; native OKF fields (type, title) are advisory. The load-bearing invariant is 'emits: facts' — the attester (scripts/computations/attester.py) is a STRUCTURAL receipt validator only and never emits a security verdict (SPECIFICATION.md §2.6, §12.5, §17).",
+  "type": "object",
+  "required": ["type", "attestarc"],
+  "properties": {
+    "type": {
+      "const": "Attested Computation",
+      "description": "OKF-native concept type."
+    },
+    "title": {
+      "type": "string",
+      "description": "Advisory, human-facing label. Never read by code for a trust decision."
+    },
+    "attestarc": {
+      "type": "object",
+      "description": "Authoritative namespace — the only fields code reads.",
+      "additionalProperties": false,
+      "required": ["id", "entrypoint", "runtime", "emits", "read_only",
+                   "network", "executes_repo_code", "parameters", "receipt"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^AC-[a-z0-9-]+$",
+          "description": "Stable machine key for the computation (e.g. AC-discover-repo)."
+        },
+        "entrypoint": {
+          "type": "string",
+          "description": "Repo-relative path to the helper script this concept models."
+        },
+        "runtime": {"type": "string", "description": "Execution runtime, e.g. python3."},
+        "emits": {
+          "const": "facts",
+          "description": "Load-bearing invariant. A helper AttestArc attests MUST emit facts, never verdicts (SPECIFICATION.md §2.6/§12/§17)."
+        },
+        "read_only": {"const": true, "description": "The computation never mutates the assessed repository."},
+        "network": {"const": false, "description": "The computation never reaches the network."},
+        "executes_repo_code": {"const": false, "description": "The computation never executes repository code."},
+        "spec_ref": {"type": "string", "description": "Cross-reference to the normative helper contract."},
+        "parameters": {
+          "type": "array",
+          "description": "The computation's CLI parameters, as data.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "flag", "required", "description"],
+            "properties": {
+              "name": {"type": "string"},
+              "flag": {"type": "string", "description": "CLI flag, or empty string for a positional."},
+              "required": {"type": "boolean"},
+              "default": {"description": "Default value (any JSON type, incl. null)."},
+              "description": {"type": "string"}
+            }
+          }
+        },
+        "receipt": {
+          "type": "object",
+          "description": "The STRUCTURAL contract of the fact receipt the computation emits — what the attester checks. It carries no data values, only the shape.",
+          "additionalProperties": false,
+          "required": ["required_keys", "key_types", "forbidden_keys"],
+          "properties": {
+            "required_keys": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "Top-level keys the receipt object must contain."
+            },
+            "key_types": {
+              "type": "object",
+              "description": "Map of receipt key -> declared type (object|array|string|boolean|integer).",
+              "additionalProperties": {
+                "enum": ["object", "array", "string", "boolean", "integer"]
+              }
+            },
+            "forbidden_keys": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "Verdict-shaped keys that MUST NOT appear (verdict, finding, severity, ...). Their presence makes a facts receipt structurally invalid — this is the facts-not-verdicts layer boundary, encoded as data."
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -30,6 +30,14 @@ All notable changes to AttestArc are documented here. This project adheres to
   every shipped file, closing the parser-differential hole.
 - **`schemas/okf-concept.schema.json`** — documents the on-disk concept shape (native
   `type` + the authoritative `attestarc:` namespace + advisory native keys).
+- **Attested-Computation modeling (`scripts/computations/`).** The deterministic
+  fact-emitting helpers (`discover_repo.py`, `inspect_workflows.py`,
+  `inspect_git_diff.py`) are modeled as OKF `type: Attested Computation` concepts —
+  a **separate, root-of-trust trust zone**, not the knowledge plane. `attester.py` is a
+  **structural receipt validator only**: it checks that a receipt a helper emitted has
+  the declared shape and carries no verdict-shaped key (`emits: facts` is the
+  load-bearing invariant), never runs a helper, never touches the repo or network, and
+  never emits a security verdict. Documented by `schemas/okf-computation.schema.json`.
 
 ## [0.5.0] — 2026-08-24
 

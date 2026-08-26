@@ -726,12 +726,14 @@ _ROOT_OF_TRUST = (
     "core/agent-safety.md", "core/promotion-policy.md",
     "scripts/knowledge_verify.py", "scripts/knowledge.py",
     "scripts/knowledge_compile.py", "scripts/okf.py",
+    "scripts/computations/attester.py",
     "knowledge/sources.yaml",
     "knowledge/trust-anchor.json",
     "schemas/knowledge.schema.json",
     "schemas/knowledge-candidate.schema.json",
     "schemas/knowledge-manifest.schema.json",
     "schemas/okf-concept.schema.json",
+    "schemas/okf-computation.schema.json",
     "schemas/learning-candidate.schema.json",
     "schemas/eval-result.schema.json",
     ".github/workflows/release-knowledge.yml",
@@ -739,8 +741,10 @@ _ROOT_OF_TRUST = (
 
 # Directory prefixes whose contents are all root-of-trust: editing a committed
 # promotion decision (or the bootstrap approval) changes what a release will ship
-# as trusted, so it is a two-party-review event just like the files above.
-_ROOT_OF_TRUST_PREFIXES = ("knowledge/promotions/",)
+# as trusted; the Attested-Computation concepts under scripts/computations/ describe
+# kernel scripts (a different trust zone from the knowledge plane) — either is a
+# two-party-review event just like the files above.
+_ROOT_OF_TRUST_PREFIXES = ("knowledge/promotions/", "scripts/computations/")
 
 
 def classify_change_paths(paths) -> dict:

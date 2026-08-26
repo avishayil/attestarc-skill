@@ -86,11 +86,17 @@ engine. Helpers are **stdlib-only** — no third-party runtime dependencies.
   normal form so a release-time round-trip self-check can assert `dump(parse(bytes)) ==
   bytes` — closing the parser-differential hole. OKF's advisory trust fields
   (`status`/`generated`/`verified`/`stale_after`) MUST NEVER be read by code; status is
-  read only from the `attestarc:` namespace.
+  read only from the `attestarc:` namespace. `scripts/computations/` is a **separate
+  trust zone** (root-of-trust, NOT the knowledge plane): it models the fact-emitting
+  helpers as OKF `type: Attested Computation` concepts, and `attester.py` is a
+  **structural receipt validator only** — it checks a receipt a helper emitted has the
+  declared shape and carries no verdict-shaped key (`emits: facts` is the load-bearing
+  invariant), never runs a helper, and never emits a verdict.
 - `schemas/findings.schema.json` defines persistent finding state;
   `schemas/knowledge*.schema.json` and `schemas/learning-candidate.schema.json`
   define the knowledge plane and evolution inputs; `schemas/okf-concept.schema.json`
-  documents the on-disk OKF concept shape (`type` + the `attestarc:` namespace).
+  documents the on-disk OKF concept shape (`type` + the `attestarc:` namespace), and
+  `schemas/okf-computation.schema.json` the Attested-Computation concept shape.
 - `evals/` hold behavioral evaluations of the agent, distinct from `tests/`,
   which verify the deterministic helper code with pytest. Eval coverage includes
   both **find** and **refuse-false-positive** cases for the reasoning grammar

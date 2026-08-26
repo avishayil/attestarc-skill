@@ -155,8 +155,10 @@ attestarc-skill/
 ├── scripts/                  # state.py, discover_repo.py, inspect_workflows.py,
 │                             # inspect_git_diff.py, knowledge.py,
 │                             # knowledge_verify.py, knowledge_compile.py, okf.py
+│   └── computations/         #   Attested-Computation concepts (§12.5) modeling the
+│                             #   fact-emitting Helpers + structural attester.py
 ├── schemas/                  # findings.schema.json, knowledge.schema.json,
-│                             # okf-concept.schema.json,
+│                             # okf-concept.schema.json, okf-computation.schema.json,
 │                             # knowledge-manifest.schema.json,
 │                             # learning-candidate.schema.json
 ├── README.md
@@ -708,6 +710,37 @@ refs, and `jobs_if_guard_removed` (a job present before and after that lost its
 job-level `if:` guard — potentially newly reachable). Facts, not findings. When either snapshot parsed only partially it
 SHALL propagate `parse_partial` so an empty delta on an unparsed workflow is not
 read as "safe" (§12.3).
+
+### 12.5 Attested-Computation modeling (`scripts/computations/`)
+
+The three fact-emitting Helpers above (`discover_repo.py`, `inspect_workflows.py`,
+`inspect_git_diff.py`) MAY be modeled as OKF **Attested Computation** concepts under
+`scripts/computations/*.md` — one concept per Helper, keyed `AC-<slug>`, describing
+its `runtime`, `parameters`, and the **structural** shape of the fact receipt it
+emits (`attestarc.receipt`: `required_keys`, `key_types`, `forbidden_keys`). The
+on-disk shape is documented by `schemas/okf-computation.schema.json`; everything
+trust-relevant lives under the `attestarc:` namespace (native OKF `type`/`title`
+are advisory).
+
+This tree is a **different trust zone** from the knowledge plane and is bound by
+three invariants:
+
+- **It describes kernel scripts, so it is root-of-trust** (two-party review, §24.2)
+  and is NEVER knowledge-attested as a volatile fact. Attested-Computation concepts
+  MUST NOT live under `knowledge/bootstrap/` and are not loaded by `load_packs`.
+- **The load-bearing invariant is `emits: facts`.** A modeled Helper emits facts,
+  never verdicts (§2.6, §12, §17). The concept's `forbidden_keys` (`verdict`,
+  `finding`, `severity`, …) restate that boundary as data: a receipt carrying a
+  verdict-shaped key is *structurally* invalid for a fact-emitting computation.
+- **`scripts/computations/attester.py` is a structural receipt validator ONLY.** It
+  answers exactly one question — *"is this JSON a structurally well-formed facts
+  receipt for this computation?"* — and emits that fact plus the structural
+  violations it observed. It SHALL NOT emit a security verdict, SHALL NOT decide
+  what a receipt means, and SHALL NOT execute a Helper or touch the assessed
+  repository (it validates a receipt the Host already produced). Like every Helper
+  it degrades rather than crashes (a malformed concept → `parse_partial`; an
+  unreadable/non-JSON receipt → a violation, not an exception). A verdict emitter
+  here would violate §2.6/§12/§17 and is prohibited.
 
 ## 13. Security requirements
 
@@ -1261,11 +1294,13 @@ routes here even without `supersedes` — or a security-*negative*/*uncertain* d
 or a missing/unbound/failing eval-result); **two-party review** (root-of-trust files:
 `core/agent-safety.md`, `core/promotion-policy.md`, `scripts/knowledge_verify.py`,
 `scripts/knowledge.py`, `scripts/knowledge_compile.py`, `scripts/okf.py`,
-`scripts/_pathsafe.py`, `knowledge/sources.yaml`, `knowledge/trust-anchor.json`,
+`scripts/_pathsafe.py`, `scripts/computations/attester.py`, `knowledge/sources.yaml`,
+`knowledge/trust-anchor.json`,
 `schemas/knowledge*.schema.json` (including the candidate schema),
-`schemas/okf-concept.schema.json`,
+`schemas/okf-concept.schema.json`, `schemas/okf-computation.schema.json`,
 `schemas/learning-candidate.schema.json`, `schemas/eval-result.schema.json`, anything
-under `knowledge/promotions/`, the release workflow, or any eval weakening/deletion);
+under `knowledge/promotions/` or `scripts/computations/`, the release workflow, or any
+eval weakening/deletion);
 **never auto-promote** (blog/issue/researcher/model inference → candidate only).
 Authority is assigned by `knowledge/sources.yaml`, never by the model.
 Content-promotion eligibility is separate from distribution trust: a *missing*
