@@ -9,14 +9,33 @@ import json
 import os
 
 import knowledge
+import okf
+
+
+def _pack_dir(root, name):
+    """The OKF pack directory for a logical pack name. Accepts a legacy
+    ``<stem>.jsonl`` name (extension stripped) or a bare stem."""
+    stem = name[:-6] if name.endswith(".jsonl") else name
+    boot = os.path.join(root, "bootstrap", stem)
+    os.makedirs(boot, exist_ok=True)
+    return boot
 
 
 def _write_pack(root, name, entries):
-    boot = os.path.join(root, "bootstrap")
-    os.makedirs(boot, exist_ok=True)
-    with open(os.path.join(boot, name), "w", encoding="utf-8") as fh:
-        for e in entries:
-            fh.write(json.dumps(e) + "\n")
+    """Write ``entries`` as an OKF concept pack: one ``<slug>.md`` per entry under
+    ``bootstrap/<stem>/`` (the verified-knowledge plane is an OKF markdown bundle)."""
+    boot = _pack_dir(root, name)
+    for e in entries:
+        fm, body = okf.concept_from_entry(e)
+        okf.write_concept(os.path.join(boot, okf.concept_slug(e)), fm, body)
+
+
+def _write_raw_concept(root, name, slug, text):
+    """Write raw concept-file bytes (used to inject a non-conforming concept that
+    must fail closed to ``parse_partial``)."""
+    boot = _pack_dir(root, name)
+    with open(os.path.join(boot, slug), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
 
 
 def _entry(**over):
@@ -114,14 +133,15 @@ def test_candidate_confidence_does_not_drive_conclusion(tmp_path):
     assert hits[0]["drives_conclusion"] is False
 
 
-def test_malformed_line_degrades_gracefully(tmp_path):
+def test_malformed_concept_degrades_gracefully(tmp_path):
     root = str(tmp_path)
-    boot = os.path.join(root, "bootstrap")
-    os.makedirs(boot)
-    with open(os.path.join(boot, "p.jsonl"), "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(_entry(id="KE-ok")) + "\n")
-        fh.write("{ this is not json\n")
-        fh.write(json.dumps({"no": "id"}) + "\n")
+    _write_pack(root, "p", [_entry(id="KE-ok")])
+    # a concept whose frontmatter is not our subset (fails parse -> parse_partial)
+    _write_raw_concept(root, "p", "broken.md",
+                       "---\nattestarc:\n\tid: bad\n---\nclaim\n")
+    # a conforming concept that carries no id (empty attestarc namespace) -> skipped
+    _write_raw_concept(root, "p", "noid.md",
+                       '---\ntype: "guidance"\n---\nclaim with no id\n')
     entries, summaries = knowledge.load_packs(root)
     assert [e["id"] for e in entries] == ["KE-ok"]
     assert summaries[0]["parse_partial"] is True
@@ -148,12 +168,13 @@ def test_content_hash_is_stable_and_ignores_annotations(tmp_path):
 
 
 def test_symlinked_pack_escaping_root_is_not_followed(tmp_path):
-    outside = tmp_path / "outside.jsonl"
-    outside.write_text(json.dumps(_entry(id="KE-evil")) + "\n")
+    outside = tmp_path / "outside.md"
+    fm, body = okf.concept_from_entry(_entry(id="KE-evil"))
+    outside.write_text(okf.render_concept(fm, body), encoding="utf-8")
     root = tmp_path / "kroot"
-    boot = root / "bootstrap"
+    boot = root / "bootstrap" / "p"
     boot.mkdir(parents=True)
-    link = boot / "linked.jsonl"
+    link = boot / "linked.md"
     try:
         os.symlink(str(outside), str(link))
     except (OSError, NotImplementedError):
@@ -342,11 +363,9 @@ def test_open_verified_parse_partial_is_inconsistent(tmp_path):
     """A partially-parsed pack is a partially-consumed verified set: the snapshot
     must fail closed rather than silently reason over the lines that parsed."""
     root = str(tmp_path)
-    boot = os.path.join(root, "bootstrap")
-    os.makedirs(boot)
-    with open(os.path.join(boot, "p.jsonl"), "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(_entry(id="KE-ok")) + "\n")
-        fh.write("{ this is not json\n")
+    _write_pack(root, "p", [_entry(id="KE-ok")])
+    _write_raw_concept(root, "p", "broken.md",
+                       "---\nattestarc:\n\tid: bad\n---\nclaim\n")
     _, _, consistency = knowledge.open_verified(root)
     assert consistency["consistent"] is False
     assert any(c.get("kind") == "parse-partial" for c in consistency["conflicts"])

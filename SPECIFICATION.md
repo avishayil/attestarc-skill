@@ -79,8 +79,9 @@ normative:
   assessment; it changes only through reviewed pull requests (§21, §22).
 - `knowledge/` — the **verified-knowledge plane**: volatile platform facts
   (version-specific defaults, API response semantics, dated guidance) shipped as
-  attested, versioned, temporal, provenance-backed JSONL packs plus a `manifest.json`
-  pinning every pack and an external `trust-anchor.json` (§23). Trusted for reasoning
+  attested, versioned, temporal, provenance-backed knowledge shipped as an Open
+  Knowledge Format (OKF v0.2) markdown bundle plus a `manifest.json` pinning every
+  file and an external `trust-anchor.json` (§23). Trusted for reasoning
   only after verification; the Assessor reads it read-only and never over the network.
 - `references/` — **expertise**: durable domain knowledge that teaches the Host
   how to *investigate* a domain (objectives, what to inspect, how to reason
@@ -148,12 +149,14 @@ attestarc-skill/
 ├── knowledge/                # VERIFIED KNOWLEDGE plane (§23)
 │   ├── sources.yaml          #   authoritative source registry (origin + identity)
 │   ├── trust-anchor.json     #   external anchor: pinned repo/workflow/OIDC identity
-│   ├── manifest.json         #   version, expiry, prev_digest, per-pack {sha256,size}
-│   └── bootstrap/*.jsonl     #   last-known-good packs shipped in the payload
+│   ├── manifest.json         #   version, expiry, prev_digest, per-file {sha256,size}
+│   └── bootstrap/            #   last-known-good OKF markdown bundle (§23):
+│                             #   index.md/log.md (reserved) + <domain>/<slug>.md
 ├── scripts/                  # state.py, discover_repo.py, inspect_workflows.py,
 │                             # inspect_git_diff.py, knowledge.py,
-│                             # knowledge_verify.py, knowledge_compile.py
+│                             # knowledge_verify.py, knowledge_compile.py, okf.py
 ├── schemas/                  # findings.schema.json, knowledge.schema.json,
+│                             # okf-concept.schema.json,
 │                             # knowledge-manifest.schema.json,
 │                             # learning-candidate.schema.json
 ├── README.md
@@ -958,8 +961,12 @@ security-assessment path into network egress or data exfiltration.
 
 ### 23.1 KnowledgeEntry
 
-The canonical schema is `schemas/knowledge.schema.json`. Knowledge is stored as
-JSONL packs (`knowledge/bootstrap/*.jsonl`), one entry per line. A `KnowledgeEntry`
+The canonical schema is `schemas/knowledge.schema.json`, which describes the
+**internal entry dict** the runtime reasons over. On disk this entry is serialized
+as an Open Knowledge Format (OKF v0.2) concept file — a UTF-8 markdown file with
+YAML frontmatter — under `knowledge/bootstrap/<domain>/<slug>.md` (§23.1.1); the
+schema and every consumer below operate on the entry dict reconstructed from that
+file, so the field vocabulary is unchanged by the on-disk format. A `KnowledgeEntry`
 SHALL contain `id`, `kind` (`platform-semantics` | `api` | `standard` | `guidance`),
 `platform`, `subject`, `claim`, `applies_to` (`product`, and OPTIONAL `events`,
 `action`, `version`), `valid_from`, `status` (`active` | `superseded` | `disputed`
@@ -976,6 +983,43 @@ This is the **verified** shape. The model does not produce it directly: it produ
 trusted `status`/`confidence` and MINUS any per-source `publisher`/`type`/`authority`.
 Those trusted fields are ASSIGNED by deterministic promotion (§24.2); a candidate
 that declares them is rejected.
+
+### 23.1.1 On-disk OKF serialization
+
+The verified plane ships as an OKF v0.2 markdown bundle rooted at
+`knowledge/bootstrap/`. `scripts/okf.py` is the deterministic, stdlib-only
+serializer/parser for concept files and is a root-of-trust file (§24.4). Its
+parser NEVER raises: any grammar violation degrades to `parse_partial` with a
+capped raw excerpt (fail closed), and its writer emits a single canonical normal
+form (sorted keys, 2-space indentation, always-quoted string scalars, block
+sequences) so a release-time self-check can assert `dump(parse(bytes)) == bytes`
+for every shipped file — closing the parser-differential hole. The bundle carries
+reserved `index.md` (bundle root carries `okf_version: "0.2"`) and `log.md` files;
+these are byte-pinned by the manifest but skipped by concept parsing.
+
+The mapping between the internal entry dict and the concept file is fixed:
+
+| Entry field | OKF concept location |
+|---|---|
+| `kind` | native frontmatter **`type`** (its values are the OKF concept types) |
+| `claim` | the **markdown body** (keeps frontmatter flat) |
+| `id`, `platform`, `subject`, `claim_key`, `applies_to`, `valid_from`, `expires`, `confidence`, `effect`, `supersedes`, `last_verified`, `compiler`, `status`, `extensions` | under the **`attestarc:`** frontmatter namespace (authoritative) |
+| `sources[].url` | native `sources[].resource` |
+| `sources[].publisher` | native `sources[].author` |
+| `sources[].type`/`authority`/`retrieved_at`/`content_hash`/`receipt_id` | under `attestarc.sources[].*` |
+
+**Everything the security code reads lives under the `attestarc:` namespace or the
+body; the OKF-native `status`/`generated`/`verified`/`stale_after` trust families
+are an advisory, lossy projection that NO code path branches on.** OKF's trust
+tiers are advisory signals by design; AttestArc's sole trust gate is the
+cryptographic attestation matching the external anchor (§23.3), so `status` is read
+only from `attestarc.status` (whose 5-value enum OKF's 3-value `status` cannot
+represent) and `authority` (a score) stays in the `attestarc:` namespace rather
+than a native source key. This rule is enforced by
+`test_advisory_projection_is_never_read_back`, a poisoned-projection test whose
+advisory keys contradict the `attestarc:` namespace and must change no conclusion.
+The `schemas/okf-concept.schema.json` schema documents the on-disk shape;
+`schemas/knowledge.schema.json` remains authoritative for the reconstructed dict.
 
 ### 23.2 Temporality
 
@@ -1003,8 +1047,9 @@ wrong ref for its kind — does not satisfy the anchor. (A legacy combined
 absent.) A bundle can therefore never declare its own trust, and the in-package snapshot
 is bootstrap-trusted ONLY because it rode in with the skill package (whose own
 authenticity is established at install time by §23.6, not by this anchor). Upstream CI
-attests **both** `knowledge/manifest.json` (version, expiry, `prev_digest`, per-pack
-`{sha256,size}`) **and** the published `.tar.gz` with GitHub Artifact Attestations. A
+attests **both** `knowledge/manifest.json` (version, expiry, `prev_digest`, a
+per-file `{sha256,size}` entry for every file in the bundle, including reserved
+`index.md`/`log.md`) **and** the published `.tar.gz` with GitHub Artifact Attestations. A
 normal bundle is produced ONLY by a push of a `knowledge-v*` tag and only when the
 tagged commit **is the current tip of `origin/main`** (an **exact-HEAD** gate — not
 mere ancestry — so a historically-reviewed but obsolete commit cannot be retagged as a
@@ -1075,9 +1120,10 @@ internal `_apply_revocation` (which trusts its caller) SHALL have no public entr
 
 A matching attested pack hash establishes byte integrity but NOT policy
 conformance. Before a snapshot is trusted for reasoning it SHALL additionally pass
-`validate_snapshot`: every entry schema-valid; every source's declared
+`validate_snapshot`: every entry schema-valid; every concept OKF-conformant (a
+non-empty `type` and a non-empty body/`claim`); every source's declared
 `publisher`/`type`/`authority` matching the source registry's reclassification of
-its URL (never the value written in the pack); every source URL registry-allowed;
+its URL (never the value written in the concept); every source URL registry-allowed;
 and no entry carrying a secret-looking value. This gate SHALL run at install time —
 both when refreshing an attested bundle (`knowledge_verify.install`, before advancing
 the high-water mark) and for the shipped bootstrap (`install.py
@@ -1214,9 +1260,10 @@ eval-result artifact + no failed attestation over a published pack); **require r
 routes here even without `supersedes` — or a security-*negative*/*uncertain* direction,
 or a missing/unbound/failing eval-result); **two-party review** (root-of-trust files:
 `core/agent-safety.md`, `core/promotion-policy.md`, `scripts/knowledge_verify.py`,
-`scripts/knowledge.py`, `scripts/knowledge_compile.py`, `scripts/_pathsafe.py`,
-`knowledge/sources.yaml`, `knowledge/trust-anchor.json`,
+`scripts/knowledge.py`, `scripts/knowledge_compile.py`, `scripts/okf.py`,
+`scripts/_pathsafe.py`, `knowledge/sources.yaml`, `knowledge/trust-anchor.json`,
 `schemas/knowledge*.schema.json` (including the candidate schema),
+`schemas/okf-concept.schema.json`,
 `schemas/learning-candidate.schema.json`, `schemas/eval-result.schema.json`, anything
 under `knowledge/promotions/`, the release workflow, or any eval weakening/deletion);
 **never auto-promote** (blog/issue/researcher/model inference → candidate only).
@@ -1229,7 +1276,9 @@ attestation blocks.
 Promotion SHALL be **enforced at release**, not merely decided at proposal. Each
 promotion is recorded as a committed, reviewed artifact under `knowledge/promotions/`:
 `<entry-id>.decision.json` (binding the promoted entry's canonical digest
-`entry_sha256`, `baseline_manifest_sha256`, tier, bound eval-result, and — for a review
+`entry_sha256` — computed over the reconstructed internal entry dict, excluding
+runtime-only keys and the advisory OKF projection, so it is invariant under the
+on-disk serialization — `baseline_manifest_sha256`, tier, bound eval-result, and — for a review
 tier — `review.approved_by`) or the digest-pinned `bootstrap.approval.json` (the
 hand-authored entries that predate the pipeline). `knowledge_compile.py
 verify-promotions` SHALL run in the release workflow **before the manifest is built**

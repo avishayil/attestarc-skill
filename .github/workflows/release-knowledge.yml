@@ -3,8 +3,9 @@
 # Verifies (verify-promotions gate) that every ACTIVE entry in the packs was
 # promoted through the deterministic policy — the digest-pinned bootstrap approval,
 # a still-recomputing auto-promote decision, or a recorded review approval — so a
-# hand-edited pack can never ship, THEN builds knowledge/manifest.json over
-# knowledge/bootstrap/*.jsonl (monotonic version + short TTL, pinning every pack by
+# hand-edited pack can never ship, THEN builds knowledge/manifest.json over the
+# OKF bundle (knowledge/bootstrap/**/*.md — every concept file plus the reserved
+# index.md/log.md; monotonic version + short TTL, pinning every file by
 # sha256+size), then attests the manifest with GitHub Artifact Attestations
 # (Sigstore build provenance, OIDC).
 # The attestation binds the bundle to THIS repo + workflow + issuer — the identity
@@ -106,7 +107,7 @@ jobs:
         run: |
           # ENFORCEABLE PROMOTION GATE — runs BEFORE the manifest is built so a pack
           # that never went through the promotion policy can never be shipped. Every
-          # ACTIVE entry in knowledge/bootstrap/*.jsonl must be accounted for by one
+          # ACTIVE entry in the OKF bundle (knowledge/bootstrap/**/*.md) must be accounted for by one
           # of: the digest-pinned bootstrap approval (hand-authored knowledge that
           # rode in on the signed skill release), a per-entry auto-promote decision
           # that STILL recomputes to auto-promote from the pinned baseline + a
@@ -144,6 +145,29 @@ jobs:
             python3 scripts/knowledge_compile.py verify-promotions \
               --knowledge-root knowledge --baseline knowledge --trust-caller-diff
           fi
+
+      - name: OKF canonical-form self-check (close the parser-differential hole)
+        run: |
+          # Every shipped concept MUST already be in scripts/okf.py's canonical byte
+          # form: it parses cleanly AND re-rendering the parsed (frontmatter, body)
+          # reproduces the exact bytes. This guarantees a shipped file has exactly ONE
+          # reading — a maliciously-crafted alternate serialization that our tiny
+          # subset parser would read differently than a full YAML parser cannot ship,
+          # because it would not round-trip. Reserved index.md/log.md with no
+          # frontmatter are skipped (they carry no concept).
+          python3 - <<'PY'
+          import glob, os, sys
+          sys.path.insert(0, "scripts")
+          import okf
+          bad = []
+          for md in sorted(glob.glob("knowledge/bootstrap/**/*.md", recursive=True)):
+              raw = open(md, encoding="utf-8").read()
+              if raw.startswith("---\n") and not okf.roundtrip_ok(raw):
+                  bad.append(md)
+          if bad:
+              raise SystemExit("non-canonical OKF concept(s) refusing to ship: " + ", ".join(bad))
+          print("OKF canonical-form self-check passed")
+          PY
 
       - name: Build manifest over the packs
         env:
@@ -232,9 +256,12 @@ jobs:
 
           prev_digest = previous_manifest_digest(version)
 
+          # Pin every file in the OKF bundle — all concept .md files plus the
+          # reserved index.md/log.md. Recursive glob; POSIX-normalized names.
           packs = []
-          for p in sorted(glob.glob(os.path.join(root, "bootstrap", "*.jsonl"))):
-              name = os.path.relpath(p, root)
+          for p in sorted(glob.glob(os.path.join(root, "bootstrap", "**", "*.md"),
+                                    recursive=True)):
+              name = os.path.relpath(p, root).replace(os.sep, "/")
               packs.append({"name": name, "sha256": sha256(p),
                             "size": os.path.getsize(p)})
           manifest = {

@@ -42,6 +42,7 @@ import sys
 from datetime import date, datetime
 
 import knowledge_verify
+import okf
 from _pathsafe import PathEscapeError, resolve_within_root
 
 _PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +50,9 @@ _DEFAULT_KNOWLEDGE_ROOT = os.path.join(_PACKAGE_ROOT, "knowledge")
 _ACTIVE_CONFIDENCES = ("authoritative", "corroborated")
 # Statuses that never drive a *current* conclusion.
 _NON_CURRENT = ("superseded", "retired", "draft")
+# OKF reserved bundle files: shipped and byte-pinned, but not concepts. Skipped by
+# the concept read path (they carry no ``attestarc`` namespace). Defined in okf.py.
+_OKF_RESERVED = okf._OKF_RESERVED
 
 
 class KnowledgeError(Exception):
@@ -89,47 +93,65 @@ def _load_manifest_version(knowledge_root: str) -> str:
 def load_packs(knowledge_root: str) -> tuple[list[dict], list[dict]]:
     """Load all knowledge entries under ``knowledge_root`` (confined).
 
-    Returns ``(entries, pack_summaries)``. Each entry is annotated (not persisted)
-    with ``_pack`` and ``_content_hash``. Never raises on a malformed line — it is
-    skipped and reflected in the pack summary's ``parse_partial``.
+    The verified-knowledge plane is an Open Knowledge Format (OKF) bundle rooted
+    at ``bootstrap/``: a tree of markdown concept files (``<domain>/<slug>.md``,
+    frontmatter + body). Each concept is read with ``okf.read_concept`` and
+    reconstructed into the internal entry dict with ``okf.entry_from_concept`` —
+    which reads ONLY the OKF-native ``type`` (→ ``kind``), the markdown body
+    (→ ``claim``), and the authoritative ``attestarc`` namespace; the advisory
+    OKF projection (``title``/``tags``/``sources``/``status``/``stale_after``) is
+    never read, so no trust decision rests on it.
+
+    Returns ``(entries, pack_summaries)`` — the same contract as before. Entries
+    are grouped/summarized by their bundle *pack* (the domain directory relative
+    to the knowledge root, e.g. ``bootstrap/github-actions``). Each entry is
+    annotated (not persisted) with ``_pack``/``_version``/``_content_hash``. Never
+    raises: a malformed or non-conforming concept (parse-partial, empty ``type``,
+    missing ``id``) is skipped and reflected in that pack's ``parse_partial`` so
+    the snapshot fails closed rather than reasoning over a half-read file. OKF
+    reserved files (``index.md``/``log.md``) are byte-pinned but not concepts, so
+    they are skipped without marking a pack partial.
     """
-    resolved, root_real, within = resolve_within_root(knowledge_root, knowledge_root)
+    _, root_real, _ = resolve_within_root(knowledge_root, knowledge_root)
     # (self-resolve just normalizes; the real guard is per-file below)
     entries: list[dict] = []
-    summaries: list[dict] = []
-    pattern = os.path.join(knowledge_root, "bootstrap", "*.jsonl")
     version = _load_manifest_version(knowledge_root)
-    for path in sorted(glob.glob(pattern)):
+    bootstrap = os.path.join(knowledge_root, "bootstrap")
+    pattern = os.path.join(bootstrap, "**", "*.md")
+
+    # Group concept files by pack (their immediate directory under the root).
+    packs: dict[str, list[str]] = {}
+    for path in sorted(glob.glob(pattern, recursive=True)):
+        if os.path.basename(path) in _OKF_RESERVED:
+            continue
         _, _, ok = resolve_within_root(path, root_real)
         if not ok:
             continue  # a symlink escaping the knowledge root: never follow it
-        name = os.path.basename(path)
+        pack = os.path.relpath(os.path.dirname(path), knowledge_root).replace(os.sep, "/")
+        packs.setdefault(pack, []).append(path)
+
+    summaries: list[dict] = []
+    for pack in sorted(packs):
         count = 0
         parse_partial = False
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                raw_lines = fh.readlines()
-        except OSError:
-            continue
-        for line in raw_lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
+        for path in sorted(packs[pack]):
+            concept = okf.read_concept(path)
+            if concept.get("_parse_partial"):
                 parse_partial = True
                 continue
-            if not isinstance(entry, dict) or "id" not in entry:
+            entry = okf.entry_from_concept(concept["frontmatter"], concept["body"])
+            # OKF conformance / minimal identity: a concept with no ``type`` or no
+            # ``id`` is not a usable entry — skip it and fail the pack closed.
+            if not entry.get("kind") or "id" not in entry:
                 parse_partial = True
                 continue
-            entry["_pack"] = name
+            entry["_pack"] = pack
             entry["_version"] = version
             entry["_content_hash"] = content_hash(
                 {k: v for k, v in entry.items() if not k.startswith("_")})
             entries.append(entry)
             count += 1
-        summaries.append({"pack": name, "version": version, "entries": count,
+        summaries.append({"pack": pack, "version": version, "entries": count,
                           "parse_partial": parse_partial})
     return entries, summaries
 
@@ -340,6 +362,14 @@ def validate_snapshot(entries, registry) -> dict:
             if key not in pub:
                 violations.append({"kind": "missing-field", "id": eid,
                                    "field": key})
+        # OKF conformance: a concept MUST carry a non-empty ``type`` (→ ``kind``)
+        # and a non-empty body (→ ``claim``). Presence alone (above) is not enough
+        # — an empty ``type:`` or an empty markdown body is a malformed concept.
+        for field in ("kind", "claim"):
+            if field in pub and not (isinstance(pub.get(field), str)
+                                     and pub.get(field).strip()):
+                violations.append({"kind": "okf-conformance", "id": eid,
+                                   "field": field})
         for field, allowed in (("kind", kc._KINDS), ("status", kc._STATUSES),
                                ("confidence", kc._CONFIDENCES),
                                ("effect", kc._EFFECTS)):

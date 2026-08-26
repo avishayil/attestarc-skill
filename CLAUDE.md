@@ -66,8 +66,9 @@ engine. Helpers are **stdlib-only** — no third-party runtime dependencies.
   guidance) belong in `knowledge/`, cross-referenced by entry id — the same
   deferral pattern the domain files already use for `threats/`.
 - `knowledge/` is the **verified-knowledge plane**: attested, versioned, temporal,
-  provenance-backed platform facts shipped as JSONL packs (`knowledge/bootstrap/`)
-  pinned by `manifest.json`, plus an external `knowledge/trust-anchor.json` (the root
+  provenance-backed platform facts shipped as an Open Knowledge Format (OKF v0.2)
+  markdown bundle (`knowledge/bootstrap/<domain>/<slug>.md`, one concept per file)
+  pinned file-by-file by `manifest.json`, plus an external `knowledge/trust-anchor.json` (the root
   of trust — pinned Sigstore/OIDC identity, shipped in the signed skill release, never
   overwritten by a refresh) and an identity-scoped source registry (`sources.yaml`).
   Trusted for reasoning ONLY after `scripts/knowledge_verify.py` passes verification;
@@ -78,10 +79,18 @@ engine. Helpers are **stdlib-only** — no third-party runtime dependencies.
   verification: `verify` for the installed snapshot, `verify-download` for the
   Updater). Attestation verification shells out to the system `gh attestation verify`
   (and `ssh-keygen -Y verify` where a raw signature is checked); no Python crypto
-  dependency.
+  dependency. `okf.py` is the deterministic serializer/parser for the OKF markdown
+  bundle and the **second sanctioned hand-rolled small-subset YAML parser** (alongside
+  `knowledge_compile.load_registry`): it parses a deliberately tiny grammar, never
+  raises (grammar violations degrade to `parse_partial`), and emits a single canonical
+  normal form so a release-time round-trip self-check can assert `dump(parse(bytes)) ==
+  bytes` — closing the parser-differential hole. OKF's advisory trust fields
+  (`status`/`generated`/`verified`/`stale_after`) MUST NEVER be read by code; status is
+  read only from the `attestarc:` namespace.
 - `schemas/findings.schema.json` defines persistent finding state;
   `schemas/knowledge*.schema.json` and `schemas/learning-candidate.schema.json`
-  define the knowledge plane and evolution inputs.
+  define the knowledge plane and evolution inputs; `schemas/okf-concept.schema.json`
+  documents the on-disk OKF concept shape (`type` + the `attestarc:` namespace).
 - `evals/` hold behavioral evaluations of the agent, distinct from `tests/`,
   which verify the deterministic helper code with pytest. Eval coverage includes
   both **find** and **refuse-false-positive** cases for the reasoning grammar

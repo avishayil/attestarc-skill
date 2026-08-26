@@ -33,7 +33,7 @@
       "required": ["name", "sha256", "size"],
       "additionalProperties": false,
       "properties": {
-        "name": {"type": "string", "description": "path relative to the knowledge root, e.g. bootstrap/github-actions.jsonl"},
+        "name": {"type": "string", "description": "path relative to the knowledge root, e.g. bootstrap/github-actions/gha-cache-write-triggers.md (every file in the OKF bundle is pinned, including reserved index.md/log.md)"},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "size": {"type": "integer", "minimum": 0}
       }

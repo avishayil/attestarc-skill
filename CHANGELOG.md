@@ -3,6 +3,34 @@
 All notable changes to AttestArc are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Knowledge plane migrated to the Open Knowledge Format (OKF v0.2).** The verified
+  plane now ships as an OKF markdown bundle (`knowledge/bootstrap/<domain>/<slug>.md`,
+  one concept per file) instead of JSONL packs — readable with `cat`, diffable in git,
+  and interoperable with the OKF ecosystem. Each entry maps to a concept whose native
+  `type` carries `kind`, whose markdown body carries `claim`, and whose authoritative
+  fields live under an `attestarc:` frontmatter namespace. **OKF's own trust families
+  (`status`/`generated`/`verified`/`stale_after`) are advisory and no code path reads
+  them** — AttestArc's sole trust gate remains the Sigstore/OIDC attestation against the
+  external anchor (enforced by `test_advisory_projection_is_never_read_back`). The
+  internal entry dict, `knowledge.schema.json`, all lookup/verify/promotion logic, and
+  every promotion/eval digest are unchanged (reconstruction is byte-identical, so pins
+  are invariant). `manifest.json` now pins **every file** in the bundle by
+  `{sha256,size}`; `knowledge_verify.py` rejects any undeclared file of any extension.
+
+### Added
+
+- **`scripts/okf.py`** — the deterministic, stdlib-only serializer/parser for OKF
+  concept files (root-of-trust). Parses a deliberately tiny grammar, never raises
+  (grammar violations degrade to `parse_partial`), and emits a single canonical normal
+  form; a release-time round-trip self-check asserts `dump(parse(bytes)) == bytes` for
+  every shipped file, closing the parser-differential hole.
+- **`schemas/okf-concept.schema.json`** — documents the on-disk concept shape (native
+  `type` + the authoritative `attestarc:` namespace + advisory native keys).
+
 ## [0.5.0] — 2026-08-24
 
 **The first structural minor: a self-evolving architecture.** AttestArc splits

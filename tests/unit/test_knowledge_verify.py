@@ -35,21 +35,31 @@ def _write_pack(root, name, data: bytes):
     return path
 
 
+def _concept_bytes(entry) -> bytes:
+    """Serialize an entry dict to canonical OKF concept bytes (LF)."""
+    import okf
+    fm, body = okf.concept_from_entry(entry)
+    return okf.render_concept(fm, body).encode("utf-8")
+
+
 def _make_root(tmp_path, version=2, expires="2099-01-01T00:00:00Z",
                mode=None, prev_digest=None, packs=None):
     """Build a knowledge root with one or more packs and a matching manifest.
     Returns (root_dir, manifest_sha256)."""
     root = str(tmp_path / "kroot")
     os.makedirs(root, exist_ok=True)
-    # A semantically-valid entry (schema-valid, source authority matching the
+    # A semantically-valid OKF concept (schema-valid, source authority matching the
     # package registry's classification of docs.github.com): install now runs the
-    # same semantic gate the assessor read path uses, so a bundle must pass it.
-    packs = packs or {"bootstrap/a.jsonl": (
-        b'{"id":"KE-a","kind":"platform-semantics","platform":"github-actions",'
-        b'"subject":"cache-write","claim":"cache writes are ref-scoped",'
-        b'"valid_from":"2026-01-01","status":"active","confidence":"authoritative",'
-        b'"sources":[{"publisher":"GitHub","authority":100,"type":"vendor-docs",'
-        b'"url":"https://docs.github.com/x"}]}\n')}
+    # same semantic gate the assessor read path uses over the OKF bundle, so a
+    # bundle must pass it. The verified plane is markdown, so the pack is a
+    # concept file under bootstrap/<domain>/.
+    packs = packs or {"bootstrap/github-actions/cache-write.md": _concept_bytes(
+        {"id": "KE-a", "kind": "platform-semantics", "platform": "github-actions",
+         "subject": "cache-write", "claim": "cache writes are ref-scoped",
+         "valid_from": "2026-01-01", "status": "active",
+         "confidence": "authoritative",
+         "sources": [{"publisher": "GitHub", "authority": 100,
+                      "type": "vendor-docs", "url": "https://docs.github.com/x"}]})}
     pack_meta = []
     for name, data in packs.items():
         _write_pack(root, name, data)
@@ -127,8 +137,8 @@ def test_tampered_pack_fails_integrity(tmp_path):
     state = {"highest_version": 3, "revoked_versions": [],
              "current": {"version": 3, "manifest_sha256": digest,
                          "verified_via": "attestation"}}
-    # mutate the pack after the manifest recorded its hash
-    _write_pack(root, "bootstrap/a.jsonl", b'{"id":"KE-tampered"}\n')
+    # mutate the declared pack after the manifest recorded its hash
+    _write_pack(root, "bootstrap/github-actions/cache-write.md", b"tampered\n")
     result = kv.verify_installed(knowledge_root=root, anchor=_anchor(tmp_path),
                                  client_state=state)
     assert result["trusted"] is False
@@ -141,8 +151,8 @@ def test_undeclared_pack_is_rejected(tmp_path):
     state = {"highest_version": 3, "revoked_versions": [],
              "current": {"version": 3, "manifest_sha256": digest,
                          "verified_via": "attestation"}}
-    # smuggle an extra pack not pinned by the manifest
-    _write_pack(root, "bootstrap/evil.jsonl", b'{"id":"KE-evil"}\n')
+    # smuggle an extra file not pinned by the manifest (any type is rejected)
+    _write_pack(root, "bootstrap/evil.md", b'---\ntype: "guidance"\n---\nevil\n')
     result = kv.verify_installed(knowledge_root=root, anchor=_anchor(tmp_path),
                                  client_state=state)
     assert result["trusted"] is False
@@ -325,10 +335,13 @@ def test_install_refuses_semantically_invalid_attested_snapshot(tmp_path, monkey
     pre-install gate runs the same validate/consistency/parse-completeness check the
     assessor read path uses, so install refuses to advance high-water — no durable
     availability hole from an attested-but-invalid snapshot."""
-    # A schema-invalid entry (missing required fields) with a manifest that matches it,
-    # so pack integrity passes but the semantic gate must reject it.
-    bad = b'{"id":"KE-bad","kind":"platform-semantics"}\n'
-    root, _ = _make_root(tmp_path, version=8, packs={"bootstrap/a.jsonl": bad})
+    # A schema-invalid entry (missing required fields) as a well-formed OKF concept,
+    # with a manifest that matches its bytes: pack integrity passes but the semantic
+    # gate must reject it.
+    bad = _concept_bytes({"id": "KE-bad", "kind": "platform-semantics",
+                          "claim": "incomplete"})
+    root, _ = _make_root(tmp_path, version=8,
+                         packs={"bootstrap/github-actions/bad.md": bad})
     monkeypatch.setattr(kv, "_gh_attest_verify", lambda *a, **k: (True, "ok"))
     anchor = _anchor(tmp_path)
     anchor["snapshots_dir"] = str(tmp_path / "snaps")

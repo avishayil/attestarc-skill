@@ -537,6 +537,27 @@ def test_promote_derives_corroborated_from_two_independent_origins(tmp_path,
     assert verified["confidence"] == "corroborated"
 
 
+def test_promoted_entry_round_trips_as_okf_concept(tmp_path, knowledge_dir):
+    """A promoted verified entry serializes to a canonical OKF concept that the
+    read path reconstructs byte-identically — so ``cmd_promote --concept-out``
+    produces a file ``load_packs`` reads back with no drift."""
+    import okf
+    reg = kc.load_registry(knowledge_dir)
+    out, rec = _quarantine(tmp_path, reg)
+    cand = _bound(rec)
+    validation = kc.validate_candidate(cand, reg, quarantine_dir=out)
+    verified = kc.promote_to_verified(cand, validation, reg)
+
+    path = str(tmp_path / "concept.md")
+    fm, body = okf.concept_from_entry(verified)
+    okf.write_concept(path, fm, body)
+    assert okf.roundtrip_ok(open(path, encoding="utf-8").read())
+
+    got = okf.read_concept(path)
+    assert got["_parse_partial"] is False
+    assert okf.entry_from_concept(got["frontmatter"], got["body"]) == verified
+
+
 # --------------------------------------------------------------------------- #
 # evaluate_candidate — the single, unskippable orchestrator
 # --------------------------------------------------------------------------- #
@@ -681,13 +702,14 @@ def test_eval_result_with_failures_is_not_a_pass(repo_root):
 def test_derive_change_facts_catches_modified_eval(monkeypatch):
     """A git-derived diff surfaces a modified/removed eval even if a caller would
     have 'forgotten' to list it (defect 5)."""
-    rows = [("M", "knowledge/bootstrap/github-actions.jsonl"),
+    rows = [("M", "knowledge/bootstrap/github-actions/gha-cache-write-triggers.md"),
             ("M", "evals/cases/knowledge-rollback-rejected.yaml"),
             ("D", "evals/cases/old-case.yaml"),
             ("A", "evals/cases/new-case.yaml")]
     monkeypatch.setattr(kc, "_git_diff_name_status", lambda rev: rows)
     facts = kc.derive_change_facts("BASE")
-    assert "knowledge/bootstrap/github-actions.jsonl" in facts["change_paths"]
+    assert ("knowledge/bootstrap/github-actions/gha-cache-write-triggers.md"
+            in facts["change_paths"])
     # modified + deleted evals are weakenings; an ADDED eval is not.
     assert facts["removed_or_modified_evals"] == [
         "evals/cases/knowledge-rollback-rejected.yaml", "evals/cases/old-case.yaml"]
@@ -713,10 +735,13 @@ def test_resolve_change_facts_requires_git_or_explicit_untrusted():
 
 
 def _write_pack(root, entries):
-    os.makedirs(os.path.join(root, "bootstrap"), exist_ok=True)
-    with open(os.path.join(root, "bootstrap", "p.jsonl"), "w") as fh:
-        for e in entries:
-            fh.write(json.dumps(e) + "\n")
+    """Write entries as an OKF concept pack (the verified plane is OKF markdown)."""
+    import okf
+    boot = os.path.join(root, "bootstrap", "p")
+    os.makedirs(boot, exist_ok=True)
+    for e in entries:
+        fm, body = okf.concept_from_entry(e)
+        okf.write_concept(os.path.join(boot, okf.concept_slug(e)), fm, body)
 
 
 def _active(**over):

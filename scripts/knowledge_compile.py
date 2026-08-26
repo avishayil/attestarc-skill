@@ -49,6 +49,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
+import okf   # OKF concept (de)serialization for the verified plane
 import state  # reuse the shared secret guard
 
 _PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -724,11 +725,13 @@ def derive_direction(candidate: dict, diff: dict) -> dict:
 _ROOT_OF_TRUST = (
     "core/agent-safety.md", "core/promotion-policy.md",
     "scripts/knowledge_verify.py", "scripts/knowledge.py",
-    "scripts/knowledge_compile.py", "knowledge/sources.yaml",
+    "scripts/knowledge_compile.py", "scripts/okf.py",
+    "knowledge/sources.yaml",
     "knowledge/trust-anchor.json",
     "schemas/knowledge.schema.json",
     "schemas/knowledge-candidate.schema.json",
     "schemas/knowledge-manifest.schema.json",
+    "schemas/okf-concept.schema.json",
     "schemas/learning-candidate.schema.json",
     "schemas/eval-result.schema.json",
     ".github/workflows/release-knowledge.yml",
@@ -1443,6 +1446,20 @@ def cmd_promote(args) -> int:
             f"reasons={result['promotion']['reasons']})\n")
         return 1
     verified = promote_to_verified(candidate, result["validation"], registry)
+    # The verified plane is an OKF markdown bundle. ``--concept-out`` writes the
+    # entry as a canonical OKF concept file the maintainer commits into the bundle;
+    # ``--format concept`` prints that concept text to stdout; the default stays
+    # JSON (the machine shape other steps/tests consume). Emitting/writing is all
+    # the Updater does — placing the file into the bundle remains a reviewed step.
+    if getattr(args, "concept_out", None):
+        fm, body = okf.concept_from_entry(verified)
+        okf.write_concept(args.concept_out, fm, body)
+        sys.stderr.write(f"wrote OKF concept: {args.concept_out}\n")
+        return 0
+    if getattr(args, "format", "json") == "concept":
+        fm, body = okf.concept_from_entry(verified)
+        sys.stdout.write(okf.render_concept(fm, body))
+        return 0
     print(json.dumps(verified, indent=2, sort_keys=True))
     return 0
 
@@ -1563,6 +1580,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="emit the trusted verified entry (stdin) ONLY on an "
                              "auto-promote tier; assigns status/confidence + "
                              "receipt-derived provenance")
+    sp.add_argument("--format", choices=["json", "concept"], default="json",
+                    help="output shape: 'json' (default, machine shape) or "
+                         "'concept' (canonical OKF markdown for the verified plane)")
+    sp.add_argument("--concept-out", default=None,
+                    help="write the entry as a canonical OKF concept file at this "
+                         "path (for committing into knowledge/bootstrap/) instead "
+                         "of printing to stdout")
     sp.set_defaults(func=cmd_promote)
 
     sp = sub.add_parser("verify-promotions", parents=[common, promo],

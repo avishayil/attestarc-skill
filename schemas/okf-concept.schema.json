@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://attestarc.dev/schemas/okf-concept-1.json",
+  "title": "AttestArc OKF concept file (on-disk shape)",
+  "description": "The ON-DISK shape of a single verified-knowledge concept in AttestArc's Open Knowledge Format (OKF v0.2) bundle under knowledge/bootstrap/**. A concept file is a UTF-8 markdown file: a YAML frontmatter block (this schema describes the frontmatter mapping) delimited by '---', followed by the markdown BODY, which carries the claim prose. AttestArc's authoritative content lives under the 'attestarc' namespace; the OKF-native 'type' selects the concept type; the markdown body is the claim. All OTHER OKF-native frontmatter keys (title, tags, sources, status, stale_after, generated, verified) are a DERIVED, ADVISORY projection for generic OKF consumers: no AttestArc code path reads them and they are EXCLUDED from the canonical entry digest, so they can be regenerated freely. Trust is NEVER decided from an OKF-native field — the sole authoritative trust gate is the Sigstore/OIDC attestation over manifest.json (see THREAT_MODEL.md). scripts/okf.py serializes/parses this file with a deterministic stdlib-only subset (no multi-line scalars, always-quoted strings, sorted keys); scripts/knowledge.py reconstructs the internal entry dict (schemas/knowledge.schema.json) from it via entry_from_concept, reading ONLY 'type', the body, and the 'attestarc' namespace.",
+  "type": "object",
+  "required": ["type", "attestarc"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["platform-semantics", "api", "standard", "guidance"],
+      "description": "OKF-native concept type. Carries the authoritative entry 'kind' (entry_from_concept maps type -> kind). MUST be non-empty for OKF conformance; an empty/absent type is a snapshot-conformance violation (validate_snapshot)."
+    },
+    "attestarc": {
+      "type": "object",
+      "description": "The AUTHORITATIVE AttestArc namespace: every field the security code reads. entry_from_concept lifts these to the top level of the reconstructed internal entry dict (schemas/knowledge.schema.json). 'kind' and 'claim' are intentionally absent here — 'kind' is the OKF-native 'type' and 'claim' is the markdown body.",
+      "required": ["id", "platform", "subject", "valid_from", "status", "confidence", "sources"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^KE-[a-z0-9-]+$" },
+        "platform": { "type": "string" },
+        "subject": { "type": "string" },
+        "claim_key": { "type": "string" },
+        "applies_to": { "type": "object" },
+        "valid_from": { "type": "string", "format": "date" },
+        "expires": { "type": "string", "format": "date" },
+        "status": {
+          "type": "string",
+          "enum": ["active", "superseded", "disputed", "retired", "draft"],
+          "description": "AUTHORITATIVE lifecycle status (5-value). The advisory OKF-native 'status' is a lossy 3-value projection of this and is never read by code."
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["authoritative", "corroborated", "candidate"]
+        },
+        "effect": {
+          "type": "string",
+          "enum": ["mitigation", "risk-increasing", "neutral"]
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["publisher", "authority", "type", "url", "retrieved_at"],
+            "additionalProperties": false,
+            "description": "AUTHORITATIVE provenance record. 'authority' (a score) deliberately lives here, NOT as an OKF-native source key (OKF avoids scores), so validate_snapshot's provenance-mismatch guard keeps working. The OKF-native sources[] projection carries only 'resource' (=url) and 'author' (=publisher).",
+            "properties": {
+              "publisher": { "type": "string" },
+              "authority": { "type": "integer", "minimum": 0, "maximum": 100 },
+              "type": {
+                "type": "string",
+                "enum": ["vendor-docs", "vendor-changelog", "vendor-repo", "standard", "security-org", "research", "issue", "community", "arbitrary-web"]
+              },
+              "url": { "type": "string" },
+              "retrieved_at": { "type": "string" },
+              "content_hash": { "type": "string" },
+              "receipt_id": { "type": "string" }
+            }
+          }
+        },
+        "supersedes": { "type": "array", "items": { "type": "string" } },
+        "last_verified": { "type": "string", "format": "date" },
+        "compiler": { "type": "object" },
+        "extensions": { "type": "object" }
+      }
+    },
+    "title": {
+      "type": "string",
+      "description": "ADVISORY OKF-native projection (= attestarc.subject). Never read by AttestArc code; excluded from the entry digest."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "ADVISORY OKF-native projection (= [platform, subject]). Never read by code."
+    },
+    "sources": {
+      "type": "array",
+      "description": "ADVISORY OKF-native provenance projection. Each item carries only 'resource' (= attestarc.sources[].url) and 'author' (= attestarc.sources[].publisher). The authoritative provenance (with type/authority/retrieved_at) is under attestarc.sources. Never read by code.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "resource": { "type": "string" },
+          "author": { "type": "string" }
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["stable", "draft", "deprecated"],
+      "description": "ADVISORY OKF-native lifecycle (3-value, lossy projection of attestarc.status). Never read by code; a trust decision NEVER rests on it."
+    },
+    "stale_after": {
+      "type": "string",
+      "description": "ADVISORY OKF-native freshness hint (= attestarc.expires at 00:00:00Z). Never read by code — freshness is enforced by the attested manifest expiry, not this field."
+    }
+  }
+}

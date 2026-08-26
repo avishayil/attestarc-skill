@@ -5,11 +5,127 @@
   "created_at": "2026-08-24T00:00:00Z",
   "expires": "2026-11-22T00:00:00Z",
   "prev_digest": null,
-  "comment": "Manifest for one atomic knowledge release. Pins every pack by sha256+size so the packs cannot be altered without changing the manifest, and the manifest is what the release workflow attests (Sigstore build provenance). 'version' is monotonic; a client rejects any manifest whose version is <= the highest version it has already trusted (anti-rollback). 'prev_digest' chains to the previous manifest. In the in-package bootstrap snapshot there is no attestation: it is trusted because it rode in on the SSH-signed skill release.",
+  "comment": "Manifest for one atomic knowledge release. The verified plane is an Open Knowledge Format (OKF v0.2) markdown bundle rooted at bootstrap/; 'packs' pins EVERY file in the bundle (concept .md files and the reserved index.md/log.md alike) by sha256+size so no file can be altered without changing the manifest, and the manifest is what the release workflow attests (Sigstore build provenance). knowledge_verify rejects any undeclared file. 'version' is monotonic; a client rejects any manifest whose version is <= the highest version it has already trusted (anti-rollback). 'prev_digest' chains to the previous manifest. In the in-package bootstrap snapshot there is no attestation: it is trusted because it rode in on the SSH-signed skill release.",
   "packs": [
-    {"name": "bootstrap/github-actions.jsonl", "sha256": "0670712cc0f40864fca85b6d89b72ebcf4c3f444e9019bded470817865163a9e", "size": 10987},
-    {"name": "bootstrap/github-scm.jsonl", "sha256": "80b6d62f63b14afc2905f9450576aaa9a74ffd18b9c74b5d76530d38194b575f", "size": 1972},
-    {"name": "bootstrap/identity.jsonl", "sha256": "e0ed3a2f6bc629aa40b90ca7e83ae21c97f847f6654ea779fa6a7f19ab6b24fb", "size": 3460},
-    {"name": "bootstrap/slsa.jsonl", "sha256": "59ec4c1b886077b942b1e0f212a4dd6c55d3e0f1e8c8d34c252e356d655c6fe1", "size": 1605}
+    {
+      "name": "bootstrap/github-actions/gha-cache-write-triggers.md",
+      "sha256": "1a7d62aeb29930173468e7cd5f0fb5ad6b06a8079a5fabd894a015ef95924d07",
+      "size": 1659
+    },
+    {
+      "name": "bootstrap/github-actions/gha-checkout-forkpr-refusal.md",
+      "sha256": "eb74026436681cc224f4577a4bb52109d9c36f0c755e3a2deb1e725e5262897f",
+      "size": 1193
+    },
+    {
+      "name": "bootstrap/github-actions/gha-checkout-persist-credentials.md",
+      "sha256": "44d1cd67a8f43ba53a365ffa192bc6c997eb8e31874e400c4a68fe4ca7a0a87d",
+      "size": 893
+    },
+    {
+      "name": "bootstrap/github-actions/gha-fork-pr-workflow-approval.md",
+      "sha256": "4e4295d254b5f1a8c965a31c94000dd21074acc8a352f3ce314f6eadb8bcf9eb",
+      "size": 1309
+    },
+    {
+      "name": "bootstrap/github-actions/gha-forkpr-token-default.md",
+      "sha256": "d8541d5f407e59003a10a6c0ceadee0a9d2257cda70696030554fdf3ad50dbd9",
+      "size": 1236
+    },
+    {
+      "name": "bootstrap/github-actions/gha-potentially-malicious-workflow-hold.md",
+      "sha256": "d2ee6d13f810040e33a3f3e028c58d5ca6ac2dfcc6e3ded345fea22b7fcad1dd",
+      "size": 1644
+    },
+    {
+      "name": "bootstrap/github-actions/gha-privileged-trigger-context.md",
+      "sha256": "9d593070c6f7d57b69a7de73a99661916a20b7629bf6650def5b3bd1a0e8f2f6",
+      "size": 1153
+    },
+    {
+      "name": "bootstrap/github-actions/gha-sha-pin-policy-carveout.md",
+      "sha256": "c9cdfe441689f48d64a1c811684346374654c51b5f49eb3c65a887e1dad3b4ec",
+      "size": 1180
+    },
+    {
+      "name": "bootstrap/github-actions/gha-workflow-execution-protection-actors.md",
+      "sha256": "c65279e775f91ee9fc55b78912a31adbcd7156eb38e6b26110428f582d64f4e7",
+      "size": 2091
+    },
+    {
+      "name": "bootstrap/github-actions/gha-workflow-execution-protection-events.md",
+      "sha256": "66416a79c3aac85c86d9984584a636406869271673ca2d867062aba948a7188e",
+      "size": 2041
+    },
+    {
+      "name": "bootstrap/github-actions/index.md",
+      "sha256": "af82af2557fcb08ac737dc82e9485256f78f4bbdec6d795897bcbca02aa53a9f",
+      "size": 1113
+    },
+    {
+      "name": "bootstrap/github-scm/ghapi-fork-pr-permission-semantics.md",
+      "sha256": "7e31daee3b64e09d8993b2f538d72274f04caf114634fb62f4f7a3b08997cf61",
+      "size": 1215
+    },
+    {
+      "name": "bootstrap/github-scm/ghapi-readonly-observation-endpoints.md",
+      "sha256": "82ae85d930050156e212891b38541686442133504f2c3a54fc9d56a2efefe748",
+      "size": 1227
+    },
+    {
+      "name": "bootstrap/github-scm/index.md",
+      "sha256": "6a80516b5cda9a0a4fba7e9e10dd634568f6510fe5f73b076a6d5aece0c4ae06",
+      "size": 267
+    },
+    {
+      "name": "bootstrap/identity/gha-fork-pr-exposure-settings.md",
+      "sha256": "45a8d7cbf14d4644ce0bff2fe06fef83f5457ac4a630523bbef92df8c8ff1f01",
+      "size": 1306
+    },
+    {
+      "name": "bootstrap/identity/index.md",
+      "sha256": "e3f07498f32d1079bea2c09db5f0ddac929a4345ba93afb23db4d2411772703a",
+      "size": 348
+    },
+    {
+      "name": "bootstrap/identity/oidc-aud-validation.md",
+      "sha256": "89ca4bcc83ec815e2df0c7f6cf8076d3fcb399c87f36c77c7fe74490d116a4c2",
+      "size": 1072
+    },
+    {
+      "name": "bootstrap/identity/oidc-immutable-claims.md",
+      "sha256": "3f7965e54d3f2b576c6b33a98226f40b46b8a255251e5126bf981e6f696444e4",
+      "size": 1186
+    },
+    {
+      "name": "bootstrap/identity/oidc-job-workflow-ref.md",
+      "sha256": "902bdc4a9613aa9495d75091fb1d48acbd93d1b1dd50bd77f66b3da7c6c7b99f",
+      "size": 1047
+    },
+    {
+      "name": "bootstrap/index.md",
+      "sha256": "546d47d95fa53450fe2ae3d3d8065c6177ca415e6b65999116a5e71f3dad7876",
+      "size": 514
+    },
+    {
+      "name": "bootstrap/log.md",
+      "sha256": "cf7e506fffa2fe780704a190adba98d6ae0a7cd93e5631f06844476b0782a319",
+      "size": 119
+    },
+    {
+      "name": "bootstrap/slsa/index.md",
+      "sha256": "ecbc7e5ff2a49226bf73bf1172a19dae7081f82edcbbfe4cbe790b2261b49ae8",
+      "size": 170
+    },
+    {
+      "name": "bootstrap/slsa/slsa-build-track.md",
+      "sha256": "a615c43734d91ef18f517ba9038ddd8e52aaf1c6b17de186855167db6811841c",
+      "size": 883
+    },
+    {
+      "name": "bootstrap/slsa/slsa-source-track.md",
+      "sha256": "b03cb1ad30b074bb5fc0636df321302cb0eb872371ee7fb7dc907334cdcc8c4a",
+      "size": 1165
+    }
   ]
 }

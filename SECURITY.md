@@ -65,7 +65,7 @@ repository, see `THREAT_MODEL.md` §6).
 │   → changes only via reviewed PR; root-of-trust files need two parties │
 ├──────────────────────────────────────────────────────────────────────┤
 │ VERIFIED KNOWLEDGE — trusted for reasoning                             │
-│   attested, versioned, temporal, provenance-backed packs (knowledge/)  │
+│   attested, versioned, temporal OKF markdown bundle (knowledge/)        │
 │   → drives a conclusion ONLY after the verification chain passes       │
 ├──────────────────────────────────────────────────────────────────────┤
 │ CANDIDATE KNOWLEDGE — untrusted                                        │
@@ -193,12 +193,20 @@ verification you get:
   (expired) snapshot stays usable but its down-gate facts stop driving conclusions
   (only scrutiny-increasing facts keep driving); conflict or unknown version routes
   to `needs_review`. Never fetch-then-trust.
-- **Integrity is necessary, not sufficient** — a matching attested pack hash proves
+- **Integrity is necessary, not sufficient** — a matching attested file hash proves
   only that these are the released bytes. Before it is trusted, a snapshot must also
-  pass `validate_snapshot`: every entry schema-valid, every source's authority
-  matching the registry's classification of its URL (never the value in the pack),
-  and no secret-looking value present. This runs at install time and on the assessor
-  read path; a partially-parsed pack fails closed rather than being reasoned over.
+  pass `validate_snapshot`: every entry schema-valid and OKF-conformant, every source's
+  authority matching the registry's classification of its URL (never the value in the
+  file), and no secret-looking value present. This runs at install time and on the
+  assessor read path; a partially-parsed file fails closed rather than being reasoned over.
+- **The format is human-readable; the trust gate is cryptographic** — the verified
+  plane ships as an Open Knowledge Format (OKF v0.2) markdown bundle (readable with
+  `cat`, diffable in git). OKF's own status/verified/stale trust fields are *advisory
+  signals*, so no code path branches on them; AttestArc's sole trust gate remains the
+  attestation against the external anchor, and status is read only from the
+  authoritative `attestarc:` namespace. A hand-rolled canonical serializer plus a
+  release-time round-trip self-check ensure the signing and reading sides can never
+  disagree on a file's meaning.
 - **Verified drives, candidate only asks** — only verified knowledge may drive a
   conclusion; candidate knowledge may raise an investigation question but never
   closes a chain; a read that skips the verify-gate can surface facts but never

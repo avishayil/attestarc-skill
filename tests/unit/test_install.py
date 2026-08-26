@@ -44,9 +44,10 @@ def test_install_rejects_tampered_bundled_pack(tmp_path):
     shutil.copytree(install.source_skill_dir(), src,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
                                                    ".git", "tests"))
-    # tamper with a pack after the manifest pinned its hash
-    boot = os.path.join(src, "knowledge", "bootstrap")
-    pack = os.path.join(boot, sorted(os.listdir(boot))[0])
+    # tamper with a manifest-declared pack after the manifest pinned its hash
+    with open(os.path.join(src, "knowledge", "manifest.json"), encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    pack = os.path.join(src, "knowledge", manifest["packs"][0]["name"])
     with open(pack, "a", encoding="utf-8") as fh:
         fh.write('{"id":"KE-injected"}\n')
     with pytest.raises(install.InstallError, match="tampered"):
@@ -60,24 +61,27 @@ def test_install_rejects_provenance_violating_snapshot(tmp_path):
     import hashlib
     import json
     import shutil
+    import sys
     src = str(tmp_path / "skillsrc")
     shutil.copytree(install.source_skill_dir(), src,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
                                                    ".git", "tests"))
-    boot = os.path.join(src, "knowledge", "bootstrap")
-    pack = os.path.join(boot, "github-actions.jsonl")
-    lines = open(pack, encoding="utf-8").read().splitlines()
-    first = json.loads(lines[0])
-    first["sources"][0]["authority"] = 42  # disagrees with the registry
-    lines[0] = json.dumps(first)
-    data = ("\n".join(lines) + "\n").encode("utf-8")
-    with open(pack, "wb") as fh:
-        fh.write(data)
+    sys.path.insert(0, os.path.join(src, "scripts"))
+    import okf
+    # Corrupt one concept's authoritative source authority so it disagrees with the
+    # registry (a provenance-mismatch the semantic gate must catch), keeping the
+    # file in canonical OKF form so it still parses.
+    rel = "bootstrap/github-actions/gha-cache-write-triggers.md"
+    pack = os.path.join(src, "knowledge", rel)
+    concept = okf.read_concept(pack)
+    concept["frontmatter"]["attestarc"]["sources"][0]["authority"] = 42
+    okf.write_concept(pack, concept["frontmatter"], concept["body"])
+    data = open(pack, "rb").read()
     # Repair the manifest hash/size so the byte-integrity gate passes.
     mpath = os.path.join(src, "knowledge", "manifest.json")
     manifest = json.loads(open(mpath, encoding="utf-8").read())
     for p in manifest["packs"]:
-        if p["name"] == "bootstrap/github-actions.jsonl":
+        if p["name"] == rel:
             p["sha256"] = hashlib.sha256(data).hexdigest()
             p["size"] = len(data)
     with open(mpath, "w", encoding="utf-8") as fh:
@@ -114,8 +118,9 @@ def test_install_both_project(tmp_path):
         assert os.path.exists(os.path.join(base, "scripts", "state.py"))
         assert os.path.exists(os.path.join(base, "core", "methodology.md"))
         assert os.path.exists(os.path.join(base, "schemas", "findings.schema.json"))
-        assert os.path.exists(os.path.join(base, "knowledge", "bootstrap",
-                                           "github-actions.jsonl"))
+        assert os.path.exists(os.path.join(
+            base, "knowledge", "bootstrap", "github-actions",
+            "gha-cache-write-triggers.md"))
         # development scaffolding is NOT shipped
         assert not os.path.exists(os.path.join(base, "tests"))
         assert not os.path.exists(os.path.join(base, "evolution"))

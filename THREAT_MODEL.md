@@ -156,7 +156,9 @@ verify_download  (Updater; network/gh)          verify_installed (Assessor; no n
 
 This defends against: knowledge tampering, rollback to vulnerable knowledge, freeze
 on a stale version, a forged bundle (no valid attestation), mix-and-match of files
-(the attestation covers the manifest, which pins every pack), and a malicious
+(the attestation covers the manifest, which pins **every file** in the OKF bundle by
+`{sha256,size}` — concept `.md` files and the reserved `index.md`/`log.md` alike — and
+`knowledge_verify.py` rejects any undeclared file of any extension), and a malicious
 mirror. Trust is **identity-constrained** by construction — a valid attestation for
 some *other* repo/workflow does not satisfy the anchor. Fail-secure means the failed
 download is discarded entirely; no metadata from it participates in a fallback, and
@@ -164,6 +166,31 @@ the independently-verified last-known-good is retained. Attestation verification
 shells out to the system `gh attestation verify` (no Python crypto dependency;
 mirrors the `ssh-keygen` shell-out convention) and is required only in the Updater
 path — the Assessor verifies against recorded client state with no network or `gh`.
+
+**OKF serialization and its trust boundary.** The verified plane ships as an Open
+Knowledge Format (OKF v0.2) markdown bundle (`knowledge/bootstrap/<domain>/<slug>.md`),
+parsed by `scripts/okf.py` (root-of-trust, §6). Two properties keep the format from
+widening the attack surface:
+
+1. **No parser differential over signed bytes.** A hand-rolled small-subset YAML
+   reader could otherwise let the signing side and the reading side disagree on what a
+   byte stream means. `okf.py` parses a deliberately tiny grammar (top-level mapping,
+   2-space block mappings/sequences, inline scalars only — prose lives in the markdown
+   body, so there are no multi-line scalars), **never raises** (any violation degrades
+   to `parse_partial`, which fails the set closed), and its writer emits a single
+   canonical normal form. A release-time self-check asserts `dump(parse(bytes)) ==
+   bytes` for every shipped file, so a non-canonical (ambiguously-parseable) file
+   cannot be released.
+2. **OKF's trust fields are advisory and are never read by code.** OKF's own
+   `status`/`generated`/`verified`/`stale_after` families are "signals, not access
+   control" by design. AttestArc's sole trust gate is the cryptographic attestation
+   against the external anchor; the security code reads status only from the
+   authoritative `attestarc.status` namespace and never branches on the OKF-native
+   projection (which is lossy — it cannot represent `disputed`/`superseded`/`retired`).
+   `authority` (a numeric score) likewise stays in the `attestarc:` namespace so the
+   provenance-vs-registry gate keeps working. This rule is enforced by
+   `test_advisory_projection_is_never_read_back`: a poisoned concept whose advisory
+   keys contradict its `attestarc:` namespace must change no conclusion.
 
 **Verify → install → persist.** `verify_download` is a pure fact operation: it
 answers "should this bundle be installed?" and mutates nothing. Advancing the
@@ -354,9 +381,12 @@ semantic diff → direction → may-promote).
   `core/promotion-policy.md`, `scripts/knowledge_verify.py`, `scripts/knowledge.py`,
   `scripts/knowledge_compile.py`, `scripts/_pathsafe.py` (the containment +
   safe-extract helper the install path trusts against untrusted archives),
+  `scripts/okf.py` (the OKF concept serializer/parser — a parser differential here
+  would let two readers disagree on a signed byte stream),
   `knowledge/sources.yaml`,
   `knowledge/trust-anchor.json`, `schemas/knowledge*.schema.json` (including the
-  candidate schema), `schemas/learning-candidate.schema.json`,
+  candidate schema), `schemas/okf-concept.schema.json`,
+  `schemas/learning-candidate.schema.json`,
   `schemas/eval-result.schema.json`, anything under `knowledge/promotions/` (the
   per-entry promotion decisions and the bootstrap approval),
   `bootstrap-anchor.json` (the package-distribution root of trust),

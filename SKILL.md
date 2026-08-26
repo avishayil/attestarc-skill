@@ -112,6 +112,13 @@ temporal, provenance-backed **knowledge plane** (`knowledge/`, schema
 `schemas/knowledge.schema.json`) and change over time. The reference files cite
 the relevant entry inline as `KE-…`.
 
+The plane ships as an Open Knowledge Format (OKF v0.2) markdown bundle —
+`knowledge/bootstrap/<domain>/<slug>.md`, one concept per file, readable with `cat`
+and diffable in git. `lookup`/`explain`/`status` are unchanged: they reason over the
+entry reconstructed from each concept and key on `attestarc.id` (the `KE-…` handle),
+not the file path. OKF's own status/verified/stale trust fields are advisory and no
+code path reads them; the cryptographic attestation is the only trust gate.
+
 - The assessor reads knowledge **only from the verified, bundled snapshot** and
   **never reaches the network**. Refreshing knowledge is a separate mode
   (`/attestarc knowledge refresh`, the Updater principal) that the assessor never

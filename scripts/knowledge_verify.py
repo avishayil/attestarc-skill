@@ -254,13 +254,19 @@ def _verify_pack_integrity(root_real: str, manifest: dict, report: _Report) -> b
 
 
 def _list_pack_files(root_real: str):
+    """Every file present under the bundle root (``bootstrap/``), walked
+    recursively. The OKF bundle is a tree of markdown files (concept files plus the
+    reserved ``index.md``/``log.md``), each of which the manifest must pin. Used to
+    reject ANY file present on disk but absent from the manifest — an
+    undeclared-file smuggle — regardless of extension, so a planted file of any
+    type is caught, not merely a stray ``.md``."""
     out = []
     boot = os.path.join(root_real, "bootstrap")
-    if os.path.isdir(boot):
-        for fn in sorted(os.listdir(boot)):
-            if fn.endswith(".jsonl"):
-                out.append(f"bootstrap/{fn}")
-    return out
+    for dirpath, _dirs, files in os.walk(boot):
+        for fn in files:
+            rel = os.path.relpath(os.path.join(dirpath, fn), root_real)
+            out.append(rel.replace(os.sep, "/"))
+    return sorted(out)
 
 
 # --------------------------------------------------------------------------- #

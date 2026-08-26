@@ -82,7 +82,7 @@ def safe_read_text(path: str, root: str, encoding: str = "utf-8") -> str:
 # decompression bomb: a small .tar.gz can declare enormous or innumerable members).
 # These bound what an OFFLINE extract-before-attest can cost before the attestation
 # gate would reject the bytes anyway. Generous relative to a real knowledge bundle
-# (a handful of small JSONL packs + a manifest), tight relative to an abuse case.
+# (a handful of small OKF markdown concept files + a manifest), tight relative to an abuse case.
 _MAX_TAR_MEMBERS = 10_000
 _MAX_TAR_FILE_BYTES = 50 * 1024 * 1024        # 50 MiB per member
 _MAX_TAR_TOTAL_BYTES = 200 * 1024 * 1024      # 200 MiB uncompressed total
